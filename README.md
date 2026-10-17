@@ -135,7 +135,11 @@ node dist/cli.js --help
 
 ## Changelog
 
-See the GitHub releases. Latest: **0.4.5** (policy files share the total budget fairly; truncation is reported).
+See the GitHub releases.
+
+- **0.4.7**: first release from this public repository. Package links, description and README updated. The code is identical to 0.4.6.
+- **0.4.6**: PR template check and trusted authors rules (both only ever raise a lane; the Worker's server floor re-applies them).
+- **0.4.5**: policy files share the total budget fairly; truncation is reported.
 
 ## Licence
 

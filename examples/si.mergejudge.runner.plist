@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd agent for mergejudge-runner (macOS). Copy to ~/Library/LaunchAgents/si.mergejudge.runner.plist,
+  replace YOUR_USER and the node / script paths, then:
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/si.mergejudge.runner.plist
+  Stop:  launchctl bootout gui/$(id -u)/si.mergejudge.runner
+  It must be a LaunchAgent (your login session), not a LaunchDaemon: `claude` uses your login's credentials.
+  No secrets belong in this file: the runner token lives in ~/.config/mergejudge-runner/config.json (mode 600)
+  and the Claude login in your normal Claude Code setup.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>si.mergejudge.runner</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/node</string>
+    <string>/usr/local/lib/node_modules/mergejudge-runner/dist/cli.js</string>
+    <string>run</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- launchd starts agents with a minimal PATH; make sure it can find `claude` and node. -->
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/Users/YOUR_USER/.local/bin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <!-- SIGTERM on stop: the runner finishes or nacks its job within 30 s. Give it a little longer before SIGKILL. -->
+  <key>ExitTimeOut</key>
+  <integer>45</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/YOUR_USER/Library/Logs/mergejudge-runner.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOUR_USER/Library/Logs/mergejudge-runner.log</string>
+</dict>
+</plist>

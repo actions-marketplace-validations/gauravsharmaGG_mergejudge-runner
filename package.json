@@ -1,0 +1,56 @@
+{
+  "name": "mergejudge-runner",
+  "version": "0.4.6",
+  "license": "MIT",
+  "type": "module",
+  "description": "Run MergeJudge reviews on your own machine with your own Claude Code login (runner protocol /runner/v1)",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "mergejudge-runner": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "examples",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "esbuild src/cli.ts --bundle --platform=node --target=node20 --format=esm --banner:js=\"#!/usr/bin/env node\nimport{createRequire as __cr}from'node:module';const require=__cr(import.meta.url);\" --outfile=dist/cli.js && chmod +x dist/cli.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "verify": "npm run typecheck && npm test && npm run build",
+    "prepublishOnly": "npm run build"
+  },
+  "homepage": "https://github.com/gauravsharmaGG/mergejudge-runner#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gauravsharmaGG/mergejudge-runner.git"
+  },
+  "bugs": {
+    "url": "https://github.com/gauravsharmaGG/mergejudge-runner/issues"
+  },
+  "keywords": [
+    "mergejudge",
+    "code-review",
+    "pull-request",
+    "claude-code",
+    "runner"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "minimatch": "^10.2.6",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@actions/github": "^9.1.1",
+    "@types/node": "^22.20.5",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.4"
+  }
+}

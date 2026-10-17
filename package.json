@@ -1,9 +1,9 @@
 {
   "name": "mergejudge-runner",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "license": "MIT",
   "type": "module",
-  "description": "Run MergeJudge reviews on your own machine with your own Claude Code login (runner protocol /runner/v1)",
+  "description": "Run MergeJudge pull-request reviews on your own machine with your own Claude Code, Codex or GLM login",
   "engines": {
     "node": ">=20"
   },
@@ -36,21 +36,23 @@
     "code-review",
     "pull-request",
     "claude-code",
+    "codex",
+    "glm",
+    "ai-code-review",
+    "github",
     "runner"
   ],
   "publishConfig": {
     "access": "public"
   },
-  "dependencies": {
-    "minimatch": "^10.2.6",
-    "yaml": "^2.9.1",
-    "zod": "^4.6.7"
-  },
   "devDependencies": {
     "@actions/github": "^9.1.1",
     "@types/node": "^22.20.5",
     "esbuild": "^0.28.2",
+    "minimatch": "^10.2.6",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.4"
+    "vitest": "^5.0.4",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.7"
   }
 }

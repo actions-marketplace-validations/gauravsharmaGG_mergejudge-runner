@@ -380,6 +380,6 @@ describe("end to end: runner job path against a real git repo (file:// remote, f
     expect(code).toBe(0);
     const hb = w.of(/^\/heartbeat$/)[0]!;
     expect(hb.body.features).toEqual(["local-code"]);
-    expect(hb.body.version).toBe("0.4.6");
+    expect(hb.body.version).toBe("0.4.7");
   });
 });

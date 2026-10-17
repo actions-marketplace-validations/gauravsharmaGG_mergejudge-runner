@@ -276,11 +276,11 @@ describe("model / engine selection", () => {
 });
 
 describe("declares capabilities", () => {
-  it("announces engines, billing and models on the runner heartbeat at start (version 0.4.6)", async () => {
+  it("announces engines, billing and models on the runner heartbeat at start (version 0.4.7)", async () => {
     const x = loop({ engine: "codex", engines: { codex: { model: "gpt-5" }, "claude-code": {}, glm: {} }, glmApiKey: GLM_KEY });
     expect(await runLoop(x.o)).toBe(0);
     const hb = w.reqs.find((r) => r.path === "/heartbeat")!;
-    expect(hb.body.version).toBe("0.4.6");
+    expect(hb.body.version).toBe("0.4.7");
     expect(hb.body.capabilities).toEqual([
       { engine: "codex", billing: "subscription", models: ["gpt-5"], defaultModel: "gpt-5" },
       { engine: "claude-code", billing: "subscription", models: [], defaultModel: null },

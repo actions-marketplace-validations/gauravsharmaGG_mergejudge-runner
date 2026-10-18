@@ -13,6 +13,7 @@ export const DIFF_SENTINEL = "SECRET_DIFF_SENTINEL_9f3a";
 export const POLICY_SENTINEL = "POLICY_SENTINEL_77c1";
 export const STDOUT_SENTINEL = "ENGINE_STDOUT_SENTINEL_c0de";
 export const tok = (c: string) => `mjr_a_${c.repeat(43)}`;
+export const DEVICE_SESSION = `mjr_s_${"S".repeat(43)}`;
 export const ENROLL = `mjr_e_${"E".repeat(43)}`;
 
 export const tmp = (p = "mjr-test-") => mkdtempSync(join(tmpdir(), p));
@@ -33,6 +34,9 @@ export class FakeWorker {
   nacks: Reply[] = [];
   rotates: Reply[] = [];
   registers: Reply[] = [];
+  /** Scripted answers for POST /device/start and /device/poll (defaults: a start, then "pending"). */
+  deviceStarts: Reply[] = [];
+  devicePolls: Reply[] = [];
   validAuth = new Set<string>();
   /** Called synchronously on each request (e.g. to snapshot the config file). */
   onRequest?: (r: Rec) => void;
@@ -59,6 +63,8 @@ export class FakeWorker {
 
   private route(r: Rec): Reply {
     if (r.path === "/register") return this.registers.shift() ?? { status: 201, body: { protocol: "v1", runnerId: "run_abc", installationId: 7, accessToken: tok("A"), expiresAt: "2027-01-01T00:00:00Z" } };
+    if (r.path === "/device/start") return this.deviceStarts.shift() ?? { status: 200, body: { session: DEVICE_SESSION, user_code: "ABCD-1234", verification_uri: "https://github.com/login/device", interval: 5, expires_in: 900 } };
+    if (r.path === "/device/poll") return this.devicePolls.shift() ?? { status: 200, body: { state: "pending", interval: 5 } };
     if (!r.auth || !this.validAuth.has(r.auth)) return { status: 401, body: { error: "unauthorized" } };
     if (r.path.startsWith("/poll")) return this.polls.shift() ?? this.defaultPoll;
     if (r.path === "/heartbeat") return { status: 200, body: { ok: true } };

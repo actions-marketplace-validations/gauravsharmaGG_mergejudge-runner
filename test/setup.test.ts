@@ -43,11 +43,11 @@ describe("setup", () => {
     expect(r.out).toContain("heartbeat:  ok");
   });
 
-  it("prompts for the code when no argument is given", async () => {
-    const asked: string[] = [];
-    const r = await run(["--no-autostart"], { prompt: async (q: string) => { asked.push(q); return ` ${ENROLL}\n`; } });
+  it("signs in with GitHub when no code is given (details in login.test.ts)", async () => {
+    w.devicePolls.push({ status: 200, body: { state: "registered", protocol: "v1", runnerId: "run_dev", installationId: 7, accessToken: tok("A"), expiresAt: "2027-01-01T00:00:00Z" } });
+    const r = await run(["--no-autostart"], { sleep: async () => {} });
     expect(r.code).toBe(0);
-    expect(asked[0]).toMatch(/code/i);
+    expect(r.out).toContain("ABCD-1234");
     expect(existsSync(cfgPath())).toBe(true);
   });
 

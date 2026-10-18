@@ -6,6 +6,7 @@ import { applyProviderOverrides, parseConfig, type Config } from "../core/config
 import { fetchBaseConfig, type Octokit, type Repo } from "../core/github.js";
 import { runFeedback, runPropose, type FeedbackPayload } from "../core/learnflow.js";
 import { runReview, type ReviewPr } from "../core/review.js";
+import { retrieveFromWorkspace, WorkspaceError } from "./workspace.js";
 
 async function auth(): Promise<{ ok: Octokit; repo: Repo; appToken: boolean; botLogin: string | null; token: string }> {
   const repo = github.context.repo;
@@ -55,6 +56,12 @@ async function runTriageMode(): Promise<void> {
   const { cfg, cfgRef } = await loadCfg(ok, repo, { ref: pr.base?.ref, sha: pr.base?.sha });
   const lane = await runReview({
     ok, repo, pr: pr as unknown as ReviewPr, cfg, cfgRef, appToken, botLogin,
+    // review.mode: deep reads the repo from the actions/checkout workspace; without one it falls back to context mode.
+    retrieveDeep: async (kept) => {
+      const dir = process.env.GITHUB_WORKSPACE;
+      if (!dir) throw new WorkspaceError("GITHUB_WORKSPACE is not set");
+      return retrieveFromWorkspace(dir, kept, cfg, `${repo.owner}/${repo.repo}`, core.info);
+    },
     log: { info: core.info, warning: core.warning },
   });
   core.setOutput("lane", lane);

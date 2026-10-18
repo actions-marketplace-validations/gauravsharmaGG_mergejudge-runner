@@ -76,6 +76,11 @@ export interface ReviewInput {
    * tools, deep falls back to context mode and says so.
    */
   deep?: DeepEnv;
+  /**
+   * Deep mode from a local checkout (the Action): called once with the files sent to the model, returns the context to read
+   * next to the diff (single pass, no tool calls). Throw to fall back to context mode; the message becomes the note.
+   */
+  retrieveDeep?: (kept: PrFile[]) => Promise<{ pieces: ContextPiece[]; notes: string[] }>;
   log: { info: (m: string) => void; warning: (m: string) => void };
   /**
    * Optional cache of the LLM result for this PR head (the Worker uses KV). On a hit the LLM is not
@@ -159,6 +164,7 @@ export interface ProduceInput {
   /** Read-only context-mode file access at the head SHA. */
   contextSource: ContextSource;
   deep?: DeepEnv;
+  retrieveDeep?: ReviewInput["retrieveDeep"];
   /**
    * Deep mode for a provider without tools (runners): context the Worker already retrieved from its index. `ok` = it came
    * from the index (reported as deep, single pass); otherwise it is plain context-mode pieces and `notes` says why.
@@ -238,11 +244,23 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
     let mode: "diff" | "context" | "deep" = cfg.review.mode;
     let tools: ReturnType<typeof deepTools> | undefined;
     let retrievedDeep = false;
-    if (mode === "deep" && o.retrieved) {
+    let retrieved = mode === "deep" ? o.retrieved : undefined;
+    if (mode === "deep" && !retrieved && o.retrieveDeep) {
+      try {
+        const r = await o.retrieveDeep(kept);
+        retrieved = { pieces: r.pieces, ok: true, notes: r.notes };
+      } catch (e) {
+        const why = (e as Error).message;
+        notes.push(`Deep mode unavailable (${why}); used context mode.`);
+        log.warning(`deep mode: ${why}; falling back to context`);
+        mode = "context";
+      }
+    }
+    if (mode === "deep" && retrieved) {
       mode = "context";
-      context = o.retrieved.pieces;
-      retrievedDeep = o.retrieved.ok;
-      notes.push(...o.retrieved.notes);
+      context = retrieved.pieces;
+      retrievedDeep = retrieved.ok;
+      notes.push(...retrieved.notes);
     } else if (mode === "deep") {
       const fallback = (why: string) => {
         mode = "context";
@@ -400,7 +418,7 @@ export async function runReview(o: ReviewInput): Promise<"auto" | "review" | "bl
     pr, cfg, cfgRef, files, provider, providerNote: note, keyNote: o.keyNote, noProviderNote: o.noProviderNote, reviewNotes, skipAi,
     readRepoFile: (p, ref) => fetchRepoFile(ok, repo, p, ref),
     contextSource: o.contextSource ?? githubContextSource(ok, repo, pr.head.sha),
-    deep: o.deep, learned: o.learned, lessons: o.lessons, outcomeStats: o.outcomeStats, log: o.log, llmCache: o.llmCache,
+    deep: o.deep, retrieveDeep: o.retrieveDeep, learned: o.learned, lessons: o.lessons, outcomeStats: o.outcomeStats, log: o.log, llmCache: o.llmCache,
   });
   return postReviewResult(result, {
     ok, repo, cfg, appToken: o.appToken, botLogin: o.botLogin, log: o.log, onResult: o.onResult, onSnapshot: o.onSnapshot,

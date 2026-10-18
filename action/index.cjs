@@ -2158,9 +2158,9 @@ var require_dispatcher_base = __commonJS({
       }
       close(callback) {
         if (callback === void 0) {
-          return new Promise((resolve, reject) => {
+          return new Promise((resolve2, reject) => {
             this.close((err, data) => {
-              return err ? reject(err) : resolve(data);
+              return err ? reject(err) : resolve2(data);
             });
           });
         }
@@ -2198,12 +2198,12 @@ var require_dispatcher_base = __commonJS({
           err = null;
         }
         if (callback === void 0) {
-          return new Promise((resolve, reject) => {
+          return new Promise((resolve2, reject) => {
             this.destroy(err, (err2, data) => {
               return err2 ? (
                 /* istanbul ignore next: should never error */
                 reject(err2)
-              ) : resolve(data);
+              ) : resolve2(data);
             });
           });
         }
@@ -4470,8 +4470,8 @@ var require_util2 = __commonJS({
     function createDeferredPromise() {
       let res;
       let rej;
-      const promise2 = new Promise((resolve, reject) => {
-        res = resolve;
+      const promise2 = new Promise((resolve2, reject) => {
+        res = resolve2;
         rej = reject;
       });
       return { promise: promise2, resolve: res, reject: rej };
@@ -6722,12 +6722,12 @@ upgrade: ${upgrade}\r
           cb();
         }
       }
-      const waitForDrain = () => new Promise((resolve, reject) => {
+      const waitForDrain = () => new Promise((resolve2, reject) => {
         assert2(callback === null);
         if (socket[kError]) {
           reject(socket[kError]);
         } else {
-          callback = resolve;
+          callback = resolve2;
         }
       });
       socket.on("close", onDrain).on("drain", onDrain);
@@ -7397,12 +7397,12 @@ var require_client_h2 = __commonJS({
           cb();
         }
       }
-      const waitForDrain = () => new Promise((resolve, reject) => {
+      const waitForDrain = () => new Promise((resolve2, reject) => {
         assert2(callback === null);
         if (socket[kError]) {
           reject(socket[kError]);
         } else {
-          callback = resolve;
+          callback = resolve2;
         }
       });
       h2stream.on("close", onDrain).on("drain", onDrain);
@@ -7881,16 +7881,16 @@ var require_client = __commonJS({
         return this[kNeedDrain] < 2;
       }
       async [kClose]() {
-        return new Promise((resolve) => {
+        return new Promise((resolve2) => {
           if (this[kSize]) {
-            this[kClosedResolve] = resolve;
+            this[kClosedResolve] = resolve2;
           } else {
-            resolve(null);
+            resolve2(null);
           }
         });
       }
       async [kDestroy](err) {
-        return new Promise((resolve) => {
+        return new Promise((resolve2) => {
           const requests = this[kQueue].splice(this[kPendingIdx]);
           for (let i = 0; i < requests.length; i++) {
             const request2 = requests[i];
@@ -7901,7 +7901,7 @@ var require_client = __commonJS({
               this[kClosedResolve]();
               this[kClosedResolve] = null;
             }
-            resolve(null);
+            resolve2(null);
           };
           if (this[kHTTPContext]) {
             this[kHTTPContext].destroy(err, callback);
@@ -7952,7 +7952,7 @@ var require_client = __commonJS({
         });
       }
       try {
-        const socket = await new Promise((resolve, reject) => {
+        const socket = await new Promise((resolve2, reject) => {
           client[kConnector]({
             host,
             hostname: hostname3,
@@ -7964,7 +7964,7 @@ var require_client = __commonJS({
             if (err) {
               reject(err);
             } else {
-              resolve(socket2);
+              resolve2(socket2);
             }
           });
         });
@@ -8300,8 +8300,8 @@ var require_pool_base = __commonJS({
         if (this[kQueue].isEmpty()) {
           await Promise.all(this[kClients].map((c) => c.close()));
         } else {
-          await new Promise((resolve) => {
-            this[kClosedResolve] = resolve;
+          await new Promise((resolve2) => {
+            this[kClosedResolve] = resolve2;
           });
         }
       }
@@ -9570,7 +9570,7 @@ var require_readable = __commonJS({
         if (this._readableState.closeEmitted) {
           return null;
         }
-        return await new Promise((resolve, reject) => {
+        return await new Promise((resolve2, reject) => {
           if (this[kContentLength] > limit) {
             this.destroy(new AbortError());
           }
@@ -9583,7 +9583,7 @@ var require_readable = __commonJS({
             if (signal?.aborted) {
               reject(signal.reason ?? new AbortError());
             } else {
-              resolve(null);
+              resolve2(null);
             }
           }).on("error", noop3).on("data", function(chunk) {
             limit -= chunk.length;
@@ -9602,7 +9602,7 @@ var require_readable = __commonJS({
     }
     async function consume(stream, type) {
       assert2(!stream[kConsume]);
-      return new Promise((resolve, reject) => {
+      return new Promise((resolve2, reject) => {
         if (isUnusable(stream)) {
           const rState = stream._readableState;
           if (rState.destroyed && rState.closeEmitted === false) {
@@ -9619,7 +9619,7 @@ var require_readable = __commonJS({
             stream[kConsume] = {
               type,
               stream,
-              resolve,
+              resolve: resolve2,
               reject,
               length: 0,
               body: []
@@ -9689,18 +9689,18 @@ var require_readable = __commonJS({
       return buffer;
     }
     function consumeEnd(consume2) {
-      const { type, body, resolve, stream, length } = consume2;
+      const { type, body, resolve: resolve2, stream, length } = consume2;
       try {
         if (type === "text") {
-          resolve(chunksDecode(body, length));
+          resolve2(chunksDecode(body, length));
         } else if (type === "json") {
-          resolve(JSON.parse(chunksDecode(body, length)));
+          resolve2(JSON.parse(chunksDecode(body, length)));
         } else if (type === "arrayBuffer") {
-          resolve(chunksConcat(body, length).buffer);
+          resolve2(chunksConcat(body, length).buffer);
         } else if (type === "blob") {
-          resolve(new Blob(body, { type: stream[kContentType] }));
+          resolve2(new Blob(body, { type: stream[kContentType] }));
         } else if (type === "bytes") {
-          resolve(chunksConcat(body, length));
+          resolve2(chunksConcat(body, length));
         }
         consumeFinish(consume2);
       } catch (err) {
@@ -9957,9 +9957,9 @@ var require_api_request = __commonJS({
     };
     function request2(opts, callback) {
       if (callback === void 0) {
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve2, reject) => {
           request2.call(this, opts, (err, data) => {
-            return err ? reject(err) : resolve(data);
+            return err ? reject(err) : resolve2(data);
           });
         });
       }
@@ -10182,9 +10182,9 @@ var require_api_stream = __commonJS({
     };
     function stream(opts, factory, callback) {
       if (callback === void 0) {
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve2, reject) => {
           stream.call(this, opts, factory, (err, data) => {
-            return err ? reject(err) : resolve(data);
+            return err ? reject(err) : resolve2(data);
           });
         });
       }
@@ -10469,9 +10469,9 @@ var require_api_upgrade = __commonJS({
     };
     function upgrade(opts, callback) {
       if (callback === void 0) {
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve2, reject) => {
           upgrade.call(this, opts, (err, data) => {
-            return err ? reject(err) : resolve(data);
+            return err ? reject(err) : resolve2(data);
           });
         });
       }
@@ -10563,9 +10563,9 @@ var require_api_connect = __commonJS({
     };
     function connect(opts, callback) {
       if (callback === void 0) {
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve2, reject) => {
           connect.call(this, opts, (err, data) => {
-            return err ? reject(err) : resolve(data);
+            return err ? reject(err) : resolve2(data);
           });
         });
       }
@@ -14428,7 +14428,7 @@ var require_fetch = __commonJS({
       function dispatch({ body }) {
         const url2 = requestCurrentURL(request2);
         const agent = fetchParams.controller.dispatcher;
-        return new Promise((resolve, reject) => agent.dispatch(
+        return new Promise((resolve2, reject) => agent.dispatch(
           {
             path: url2.pathname + url2.search,
             origin: url2.origin,
@@ -14504,7 +14504,7 @@ var require_fetch = __commonJS({
               }
               this.body = new Readable({ read: resume });
               const onError = this.onError.bind(this);
-              resolve({
+              resolve2({
                 status,
                 statusText,
                 headersList,
@@ -14547,7 +14547,7 @@ var require_fetch = __commonJS({
               for (let i = 0; i < rawHeaders.length; i += 2) {
                 headersList.append(bufferToLowerCasedHeaderName(rawHeaders[i]), rawHeaders[i + 1].toString("latin1"), true);
               }
-              resolve({
+              resolve2({
                 status,
                 statusText: STATUS_CODES[status],
                 headersList,
@@ -18288,8 +18288,8 @@ var require_util8 = __commonJS({
       return true;
     }
     function delay(ms) {
-      return new Promise((resolve) => {
-        setTimeout(resolve, ms).unref();
+      return new Promise((resolve2) => {
+        setTimeout(resolve2, ms).unref();
       });
     }
     module2.exports = {
@@ -19271,11 +19271,11 @@ var require_lib = __commonJS({
     })();
     var __awaiter3 = exports2 && exports2.__awaiter || function(thisArg, _arguments, P, generator) {
       function adopt(value) {
-        return value instanceof P ? value : new P(function(resolve) {
-          resolve(value);
+        return value instanceof P ? value : new P(function(resolve2) {
+          resolve2(value);
         });
       }
-      return new (P || (P = Promise))(function(resolve, reject) {
+      return new (P || (P = Promise))(function(resolve2, reject) {
         function fulfilled(value) {
           try {
             step(generator.next(value));
@@ -19291,7 +19291,7 @@ var require_lib = __commonJS({
           }
         }
         function step(result) {
-          result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected);
+          result.done ? resolve2(result.value) : adopt(result.value).then(fulfilled, rejected);
         }
         step((generator = generator.apply(thisArg, _arguments || [])).next());
       });
@@ -19378,26 +19378,26 @@ var require_lib = __commonJS({
       }
       readBody() {
         return __awaiter3(this, void 0, void 0, function* () {
-          return new Promise((resolve) => __awaiter3(this, void 0, void 0, function* () {
+          return new Promise((resolve2) => __awaiter3(this, void 0, void 0, function* () {
             let output2 = Buffer.alloc(0);
             this.message.on("data", (chunk) => {
               output2 = Buffer.concat([output2, chunk]);
             });
             this.message.on("end", () => {
-              resolve(output2.toString());
+              resolve2(output2.toString());
             });
           }));
         });
       }
       readBodyBuffer() {
         return __awaiter3(this, void 0, void 0, function* () {
-          return new Promise((resolve) => __awaiter3(this, void 0, void 0, function* () {
+          return new Promise((resolve2) => __awaiter3(this, void 0, void 0, function* () {
             const chunks = [];
             this.message.on("data", (chunk) => {
               chunks.push(chunk);
             });
             this.message.on("end", () => {
-              resolve(Buffer.concat(chunks));
+              resolve2(Buffer.concat(chunks));
             });
           }));
         });
@@ -19605,14 +19605,14 @@ var require_lib = __commonJS({
        */
       requestRaw(info2, data) {
         return __awaiter3(this, void 0, void 0, function* () {
-          return new Promise((resolve, reject) => {
+          return new Promise((resolve2, reject) => {
             function callbackForResult(err, res) {
               if (err) {
                 reject(err);
               } else if (!res) {
                 reject(new Error("Unknown error"));
               } else {
-                resolve(res);
+                resolve2(res);
               }
             }
             this.requestRawWithCallback(info2, data, callbackForResult);
@@ -19856,12 +19856,12 @@ var require_lib = __commonJS({
         return __awaiter3(this, void 0, void 0, function* () {
           retryNumber = Math.min(ExponentialBackoffCeiling, retryNumber);
           const ms = ExponentialBackoffTimeSlice * Math.pow(2, retryNumber);
-          return new Promise((resolve) => setTimeout(() => resolve(), ms));
+          return new Promise((resolve2) => setTimeout(() => resolve2(), ms));
         });
       }
       _processResponse(res, options) {
         return __awaiter3(this, void 0, void 0, function* () {
-          return new Promise((resolve, reject) => __awaiter3(this, void 0, void 0, function* () {
+          return new Promise((resolve2, reject) => __awaiter3(this, void 0, void 0, function* () {
             const statusCode = res.message.statusCode || 0;
             const response = {
               statusCode,
@@ -19869,7 +19869,7 @@ var require_lib = __commonJS({
               headers: {}
             };
             if (statusCode === HttpCodes2.NotFound) {
-              resolve(response);
+              resolve2(response);
             }
             function dateTimeDeserializer(key, value) {
               if (typeof value === "string") {
@@ -19908,7 +19908,7 @@ var require_lib = __commonJS({
               err.result = response.result;
               reject(err);
             } else {
-              resolve(response);
+              resolve2(response);
             }
           }));
         });
@@ -23882,10 +23882,10 @@ var require_resolve_block_map = __commonJS({
       let offset = bm.offset;
       let commentEnd = null;
       for (const collItem of bm.items) {
-        const { start, key, sep: sep3, value } = collItem;
+        const { start, key, sep: sep4, value } = collItem;
         const keyProps = resolveProps.resolveProps(start, {
           indicator: "explicit-key-ind",
-          next: key ?? sep3?.[0],
+          next: key ?? sep4?.[0],
           offset,
           onError,
           parentIndent: bm.indent,
@@ -23899,7 +23899,7 @@ var require_resolve_block_map = __commonJS({
             else if ("indent" in key && key.indent !== bm.indent)
               onError(offset, "BAD_INDENT", startColMsg);
           }
-          if (!keyProps.anchor && !keyProps.tag && !sep3) {
+          if (!keyProps.anchor && !keyProps.tag && !sep4) {
             commentEnd = keyProps.end;
             if (keyProps.comment) {
               if (map2.comment)
@@ -23923,7 +23923,7 @@ var require_resolve_block_map = __commonJS({
         ctx.atKey = false;
         if (utilMapIncludes.mapIncludes(ctx, map2.items, keyNode))
           onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
-        const valueProps = resolveProps.resolveProps(sep3 ?? [], {
+        const valueProps = resolveProps.resolveProps(sep4 ?? [], {
           indicator: "map-value-ind",
           next: value,
           offset: keyNode.range[2],
@@ -23939,7 +23939,7 @@ var require_resolve_block_map = __commonJS({
             if (ctx.options.strict && keyProps.start < valueProps.found.offset - 1024)
               onError(keyNode.range, "KEY_OVER_1024_CHARS", "The : indicator must be at most 1024 chars after the start of an implicit block mapping key");
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep3, null, valueProps, onError);
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep4, null, valueProps, onError);
           if (ctx.schema.compat)
             utilFlowIndentCheck.flowIndentCheck(bm.indent, value, onError);
           offset = valueNode.range[2];
@@ -24030,7 +24030,7 @@ var require_resolve_end = __commonJS({
       let comment = "";
       if (end) {
         let hasSpace = false;
-        let sep3 = "";
+        let sep4 = "";
         for (const token of end) {
           const { source, type } = token;
           switch (type) {
@@ -24044,13 +24044,13 @@ var require_resolve_end = __commonJS({
               if (!comment)
                 comment = cb;
               else
-                comment += sep3 + cb;
-              sep3 = "";
+                comment += sep4 + cb;
+              sep4 = "";
               break;
             }
             case "newline":
               if (comment)
-                sep3 += source;
+                sep4 += source;
               hasSpace = true;
               break;
             default:
@@ -24093,18 +24093,18 @@ var require_resolve_flow_collection = __commonJS({
       let offset = fc.offset + fc.start.source.length;
       for (let i = 0; i < fc.items.length; ++i) {
         const collItem = fc.items[i];
-        const { start, key, sep: sep3, value } = collItem;
+        const { start, key, sep: sep4, value } = collItem;
         const props = resolveProps.resolveProps(start, {
           flow: fcName,
           indicator: "explicit-key-ind",
-          next: key ?? sep3?.[0],
+          next: key ?? sep4?.[0],
           offset,
           onError,
           parentIndent: fc.indent,
           startOnNewline: false
         });
         if (!props.found) {
-          if (!props.anchor && !props.tag && !sep3 && !value) {
+          if (!props.anchor && !props.tag && !sep4 && !value) {
             if (i === 0 && props.comma)
               onError(props.comma, "UNEXPECTED_TOKEN", `Unexpected , in ${fcName}`);
             else if (i < fc.items.length - 1)
@@ -24158,8 +24158,8 @@ var require_resolve_flow_collection = __commonJS({
             }
           }
         }
-        if (!isMap2 && !sep3 && !props.found) {
-          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep3, null, props, onError);
+        if (!isMap2 && !sep4 && !props.found) {
+          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep4, null, props, onError);
           coll.items.push(valueNode);
           offset = valueNode.range[2];
           if (isBlock(value))
@@ -24171,7 +24171,7 @@ var require_resolve_flow_collection = __commonJS({
           if (isBlock(key))
             onError(keyNode.range, "BLOCK_IN_FLOW", blockMsg);
           ctx.atKey = false;
-          const valueProps = resolveProps.resolveProps(sep3 ?? [], {
+          const valueProps = resolveProps.resolveProps(sep4 ?? [], {
             flow: fcName,
             indicator: "map-value-ind",
             next: value,
@@ -24182,8 +24182,8 @@ var require_resolve_flow_collection = __commonJS({
           });
           if (valueProps.found) {
             if (!isMap2 && !props.found && ctx.options.strict) {
-              if (sep3)
-                for (const st of sep3) {
+              if (sep4)
+                for (const st of sep4) {
                   if (st === valueProps.found)
                     break;
                   if (st.type === "newline") {
@@ -24200,7 +24200,7 @@ var require_resolve_flow_collection = __commonJS({
             else
               onError(valueProps.start, "MISSING_CHAR", `Missing , or : between ${fcName} items`);
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep3, null, valueProps, onError) : null;
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep4, null, valueProps, onError) : null;
           if (valueNode) {
             if (isBlock(value))
               onError(valueNode.range, "BLOCK_IN_FLOW", blockMsg);
@@ -24380,7 +24380,7 @@ var require_resolve_block_scalar = __commonJS({
           chompStart = i + 1;
       }
       let value = "";
-      let sep3 = "";
+      let sep4 = "";
       let prevMoreIndented = false;
       for (let i = 0; i < contentStart; ++i)
         value += lines[i][0].slice(trimIndent) + "\n";
@@ -24397,24 +24397,24 @@ var require_resolve_block_scalar = __commonJS({
           indent = "";
         }
         if (type === Scalar.Scalar.BLOCK_LITERAL) {
-          value += sep3 + indent.slice(trimIndent) + content;
-          sep3 = "\n";
+          value += sep4 + indent.slice(trimIndent) + content;
+          sep4 = "\n";
         } else if (indent.length > trimIndent || content[0] === "	") {
-          if (sep3 === " ")
-            sep3 = "\n";
-          else if (!prevMoreIndented && sep3 === "\n")
-            sep3 = "\n\n";
-          value += sep3 + indent.slice(trimIndent) + content;
-          sep3 = "\n";
+          if (sep4 === " ")
+            sep4 = "\n";
+          else if (!prevMoreIndented && sep4 === "\n")
+            sep4 = "\n\n";
+          value += sep4 + indent.slice(trimIndent) + content;
+          sep4 = "\n";
           prevMoreIndented = true;
         } else if (content === "") {
-          if (sep3 === "\n")
+          if (sep4 === "\n")
             value += "\n";
           else
-            sep3 = "\n";
+            sep4 = "\n";
         } else {
-          value += sep3 + content;
-          sep3 = " ";
+          value += sep4 + content;
+          sep4 = " ";
           prevMoreIndented = false;
         }
       }
@@ -24597,25 +24597,25 @@ var require_resolve_flow_scalar = __commonJS({
         trimBoth = /^[ \t]+|[ \t]+$/g;
       }
       let res = match2[1].replace(trimEnd, "");
-      let sep3 = " ";
+      let sep4 = " ";
       let pos = line.lastIndex;
       while (match2 = line.exec(source)) {
         const lm = match2[1].replace(trimBoth, "");
         if (lm === "") {
-          if (sep3 === "\n")
-            res += sep3;
+          if (sep4 === "\n")
+            res += sep4;
           else
-            sep3 = "\n";
+            sep4 = "\n";
         } else {
-          res += sep3 + lm;
-          sep3 = " ";
+          res += sep4 + lm;
+          sep4 = " ";
         }
         pos = line.lastIndex;
       }
       const last = /[ \t]*(.*)/sy;
       last.lastIndex = pos;
       match2 = last.exec(source);
-      return res + sep3 + (match2?.[1] ?? "");
+      return res + sep4 + (match2?.[1] ?? "");
     }
     function doubleQuotedValue(source, onError) {
       let res = "";
@@ -25425,14 +25425,14 @@ var require_cst_stringify = __commonJS({
         }
       }
     }
-    function stringifyItem({ start, key, sep: sep3, value }) {
+    function stringifyItem({ start, key, sep: sep4, value }) {
       let res = "";
       for (const st of start)
         res += st.source;
       if (key)
         res += stringifyToken(key);
-      if (sep3)
-        for (const st of sep3)
+      if (sep4)
+        for (const st of sep4)
           res += st.source;
       if (value)
         res += stringifyToken(value);
@@ -26599,18 +26599,18 @@ var require_parser = __commonJS({
         if (this.type === "map-value-ind") {
           const prev = getPrevProps(this.peek(2));
           const start = getFirstKeyStartProps(prev);
-          let sep3;
+          let sep4;
           if (scalar.end) {
-            sep3 = scalar.end;
-            sep3.push(this.sourceToken);
+            sep4 = scalar.end;
+            sep4.push(this.sourceToken);
             delete scalar.end;
           } else
-            sep3 = [this.sourceToken];
+            sep4 = [this.sourceToken];
           const map2 = {
             type: "block-map",
             offset: scalar.offset,
             indent: scalar.indent,
-            items: [{ start, key: scalar, sep: sep3 }]
+            items: [{ start, key: scalar, sep: sep4 }]
           };
           this.onKeyLine = true;
           this.stack[this.stack.length - 1] = map2;
@@ -26763,15 +26763,15 @@ var require_parser = __commonJS({
                 } else if (isFlowToken(it.key) && !includesToken(it.sep, "newline")) {
                   const start2 = getFirstKeyStartProps(it.start);
                   const key = it.key;
-                  const sep3 = it.sep;
-                  sep3.push(this.sourceToken);
+                  const sep4 = it.sep;
+                  sep4.push(this.sourceToken);
                   delete it.key;
                   delete it.sep;
                   this.stack.push({
                     type: "block-map",
                     offset: this.offset,
                     indent: this.indent,
-                    items: [{ start: start2, key, sep: sep3 }]
+                    items: [{ start: start2, key, sep: sep4 }]
                   });
                 } else if (start.length > 0) {
                   it.sep = it.sep.concat(start, this.sourceToken);
@@ -26965,13 +26965,13 @@ var require_parser = __commonJS({
             const prev = getPrevProps(parent);
             const start = getFirstKeyStartProps(prev);
             fixFlowSeqItems(fc);
-            const sep3 = fc.end.splice(1, fc.end.length);
-            sep3.push(this.sourceToken);
+            const sep4 = fc.end.splice(1, fc.end.length);
+            sep4.push(this.sourceToken);
             const map2 = {
               type: "block-map",
               offset: fc.offset,
               indent: fc.indent,
-              items: [{ start, key: fc, sep: sep3 }]
+              items: [{ start, key: fc, sep: sep4 }]
             };
             this.onKeyLine = true;
             this.stack[this.stack.length - 1] = map2;
@@ -27411,11 +27411,11 @@ var import_os = require("os");
 var import_fs = require("fs");
 var __awaiter = function(thisArg, _arguments, P, generator) {
   function adopt(value) {
-    return value instanceof P ? value : new P(function(resolve) {
-      resolve(value);
+    return value instanceof P ? value : new P(function(resolve2) {
+      resolve2(value);
     });
   }
-  return new (P || (P = Promise))(function(resolve, reject) {
+  return new (P || (P = Promise))(function(resolve2, reject) {
     function fulfilled(value) {
       try {
         step(generator.next(value));
@@ -27431,7 +27431,7 @@ var __awaiter = function(thisArg, _arguments, P, generator) {
       }
     }
     function step(result) {
-      result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected);
+      result.done ? resolve2(result.value) : adopt(result.value).then(fulfilled, rejected);
     }
     step((generator = generator.apply(thisArg, _arguments || [])).next());
   });
@@ -27803,11 +27803,11 @@ var httpClient = __toESM(require_lib(), 1);
 var import_undici2 = __toESM(require_undici(), 1);
 var __awaiter2 = function(thisArg, _arguments, P, generator) {
   function adopt(value) {
-    return value instanceof P ? value : new P(function(resolve) {
-      resolve(value);
+    return value instanceof P ? value : new P(function(resolve2) {
+      resolve2(value);
     });
   }
-  return new (P || (P = Promise))(function(resolve, reject) {
+  return new (P || (P = Promise))(function(resolve2, reject) {
     function fulfilled(value) {
       try {
         step(generator.next(value));
@@ -27823,7 +27823,7 @@ var __awaiter2 = function(thisArg, _arguments, P, generator) {
       }
     }
     function step(result) {
-      result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected);
+      result.done ? resolve2(result.value) : adopt(result.value).then(fulfilled, rejected);
     }
     step((generator = generator.apply(thisArg, _arguments || [])).next());
   });
@@ -37054,7 +37054,7 @@ var recursive = /* @__PURE__ */ new WeakMap();
 var NONE = 0;
 var ASSUMED = 1;
 var PROVEN = 2;
-function isRecursive(inst, stack, resolve) {
+function isRecursive(inst, stack, resolve2) {
   const cached2 = recursive.get(inst);
   if (cached2 !== void 0)
     return cached2 ? PROVEN : NONE;
@@ -37064,7 +37064,7 @@ function isRecursive(inst, stack, resolve) {
   let result = NONE;
   const check2 = (child) => {
     if (result !== PROVEN && child?._zod) {
-      const answer = isRecursive(child, stack, resolve);
+      const answer = isRecursive(child, stack, resolve2);
       if (answer > result)
         result = answer;
     }
@@ -37075,7 +37075,7 @@ function isRecursive(inst, stack, resolve) {
       const desc = Object.getOwnPropertyDescriptor(sh, key);
       if (spread && !desc.enumerable)
         continue;
-      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve) : NONE;
+      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve2) : NONE;
       if (child > answer)
         answer = child;
     }
@@ -37139,7 +37139,7 @@ function isRecursive(inst, stack, resolve) {
       break;
     // `$ZodLazy` caches its inner on the def, so a resolved edge is followed exactly
     case "lazy": {
-      const inner = def._cachedInner ?? (resolve ? inst._zod.innerType : void 0);
+      const inner = def._cachedInner ?? (resolve2 ? inst._zod.innerType : void 0);
       merge3(inner ? isRecursive(inner, stack, false) : ASSUMED);
       break;
     }
@@ -53958,7 +53958,7 @@ var configSchema = external_exports.object({
     auto: external_exports.array(external_exports.string()).default(DEFAULT_AUTO),
     protected: external_exports.array(external_exports.string()).default(DEFAULT_PROTECTED),
     max_auto_lines: external_exports.number().int().positive().default(200),
-    /** Opt-in lane for small code changes. Off by default: code files always need review. */
+    /** Opt-in lane for small code changes. Off by default: code files always need review. See docs/DESIGN.md. */
     code_auto: codeAutoSchema,
     /**
      * Opt-in gate for every auto path: only listed GitHub logins. Off by default = no author check.
@@ -54116,7 +54116,7 @@ function applyProviderOverrides(cfg, o) {
 var AGENT_LABEL = "mergejudge:agent";
 var isAgentLabel = (name) => (name ?? "").trim().toLowerCase() === AGENT_LABEL;
 var hasAgentLabel = (labels) => !!labels?.some(isAgentLabel);
-var AGENT_TRAILER = /^[ \t]*MergeJudge-Actor[ \t]*:[ \t]*agent[ \t]*\r?$/im;
+var AGENT_TRAILER = /\bMergeJudge-Actor[ \t]*:[ \t]*agent\b/i;
 var hasAgentTrailer = (text) => AGENT_TRAILER.test(text ?? "");
 var isAgentPr = (pr) => hasAgentLabel(pr.labels) || hasAgentTrailer(pr.body);
 
@@ -54441,6 +54441,13 @@ function findRemovedGuards(patch, path2 = "") {
     (g) => !added.some((l) => g.re.test(l)) && lines.some((l, i) => l.op === "del" && g.re.test(l.text) && (!yaml || !guardRemovedWithItsBlock(lines, i)))
   ).map((g) => g.name);
 }
+var AUTH_CHECK = /\b(?:requireRole|requireAuth\w*|requireAdmin|requirePermission|isAdmin|isSuperuser|isOwner|hasRole|hasPermission|checkPermission|checkAuth\w*|assertAuth\w*|ensureAuth\w*|authorize|authorise|verifyToken|can[A-Z]\w*)\s*\(|\b(?:role|userRole|user\.role|isAdmin)\s*[!=]==?\s*[\w"'`]|\bpermissions?\.(?:includes|has|some)\(|@(?:RolesAllowed|PreAuthorize|Secured|login_required|permission_required)\b|\bAuthGuard\b|\bRolesGuard\b/;
+function removesAuthCheck(patch) {
+  if (!patch) return false;
+  const lines = parsePatchLines(patch);
+  if (lines.some((l) => l.op === "add" && AUTH_CHECK.test(l.text))) return false;
+  return lines.some((l) => l.op === "del" && AUTH_CHECK.test(l.text));
+}
 var CODE_AUTO_NEVER_GLOBS = [".github/**", "**/.env*", "_headers", "**/_headers"];
 var ALWAYS_REVIEW_GLOBS = ["_headers", "**/_headers"];
 var CODE_AUTO_NEVER_EXT = /* @__PURE__ */ new Set(["sql", "sh", "bash", "zsh", "ps1", "wasm"]);
@@ -54479,6 +54486,7 @@ function classifyFileInner(file2, cfg) {
   const ca = cfg.lanes.code_auto;
   const codeCandidate = !!ca?.enabled && paths.some(isCodeFile);
   if (!codeCandidate && paths.some(isCodeFile)) raise("review", "code file (always needs human review)");
+  if (paths.some(isCodeFile) && removesAuthCheck(file2.patch)) raise("review", "removes an authorization or role check (needs human review)");
   if (isDependencyFile(file2.path)) raise("review", "dependency manifest or lockfile change");
   const changed = file2.additions + file2.deletions;
   if (!file2.patch && file2.status === "removed") raise("review", "removed binary or very large file");
@@ -54706,6 +54714,17 @@ var EMOJI = { auto: "\u{1F7E2}", review: "\u{1F7E1}", block: "\u{1F534}" };
 function escapeMd(s) {
   return s.replace(/\s*[\r\n]+\s*/g, " ").replace(/[\\`*_{}\[\]()<>#+!|~]/g, "\\$&").replace(/&/g, "&amp;").replace(/@/g, "@\u200B").trim();
 }
+var MAX_COMMENT_CHARS = 6e4;
+var MAX_LIST_ROWS = 100;
+var moreNote = (shown, total) => total > shown ? [`_\u2026and ${total - shown} more not shown (${total} in total)._`] : [];
+function capBody(head, tail, max = MAX_COMMENT_CHARS) {
+  if (head.length + tail.length <= max) return head + tail;
+  const note = "\n\n> \u26A0\uFE0F This comment was shortened to fit GitHub's size limit.\n";
+  let cut = head.slice(0, Math.max(0, max - tail.length - note.length - 64));
+  cut = cut.slice(0, Math.max(cut.lastIndexOf("\n"), 0));
+  const open3 = (cut.match(/<details/g) ?? []).length - (cut.match(/<\/details>/g) ?? []).length;
+  return cut + "\n" + "</details>\n".repeat(Math.max(open3, 0)) + note + tail;
+}
 function renderLaneExplanation(agg) {
   const explanation = explainLane(agg);
   return [
@@ -54713,7 +54732,8 @@ function renderLaneExplanation(agg) {
     "",
     "<details><summary>Why this lane? Details</summary>",
     "",
-    ...explanation.reasons.map((r) => `- ${r.path ? escapeMd(r.path) + ": " : ""}${escapeMd(r.messages.join("; "))}${r.source ? ` (source: ${escapeMd(r.source)})` : ""}`),
+    ...explanation.reasons.slice(0, MAX_LIST_ROWS).map((r) => `- ${r.path ? escapeMd(r.path) + ": " : ""}${escapeMd(r.messages.join("; "))}${r.source ? ` (source: ${escapeMd(r.source)})` : ""}`),
+    ...moreNote(MAX_LIST_ROWS, explanation.reasons.length),
     "",
     "</details>"
   ].join("\n");
@@ -54728,14 +54748,14 @@ function renderComment(r) {
   if (agg.labelReasons.length) out.push(...agg.labelReasons.map((l) => `- \u{1F3F7}\uFE0F ${l}`), "");
   if (flagged.length) {
     out.push("### Files needing human review", "", "| File | Lane | Source | Reason |", "|---|---|---|---|");
-    for (const f of flagged)
+    for (const f of flagged.slice(0, MAX_LIST_ROWS))
       out.push(`| ${escapeMd(f.path)} | ${EMOJI[f.lane]} ${f.lane} | ${f.source ?? "rule"} | ${escapeMd(f.reasons.join("; ")) || "-"} |`);
-    out.push("");
+    out.push(...moreNote(MAX_LIST_ROWS, flagged.length), "");
   }
   if (safe.length) {
     out.push(`<details><summary>Safe files (${safe.length})</summary>`, "");
-    for (const f of safe) out.push(`- ${escapeMd(f.path)}${f.codeAuto ? " (code, auto via code_auto opt-in)" : ""}`);
-    out.push("", "</details>", "");
+    for (const f of safe.slice(0, MAX_LIST_ROWS)) out.push(`- ${escapeMd(f.path)}${f.codeAuto ? " (code, auto via code_auto opt-in)" : ""}`);
+    out.push(...moreNote(MAX_LIST_ROWS, safe.length), "", "</details>", "");
   }
   if (safe.length && flagged.length) {
     out.push(
@@ -54743,7 +54763,8 @@ function renderComment(r) {
       "",
       "This PR mixes auto-mergeable and review/block changes. These files could go in a separate auto-mergeable PR:",
       "",
-      ...safe.map((f) => `- ${escapeMd(f.path)}`),
+      ...safe.slice(0, MAX_LIST_ROWS).map((f) => `- ${escapeMd(f.path)}`),
+      ...moreNote(MAX_LIST_ROWS, safe.length),
       ""
     );
   }
@@ -54760,21 +54781,22 @@ function renderComment(r) {
     }
     if (fails.length) out.push("");
     out.push(`<details><summary>All criteria</summary>`, "");
-    for (const x of agg.rubric)
+    for (const x of agg.rubric.slice(0, MAX_LIST_ROWS))
       out.push(`- ${icon[x.verdict]} \`${escapeMd(x.id)}\`${x.score !== void 0 ? ` ${x.score}/5` : ""}: ${escapeMd(x.justification) || "-"}`);
-    out.push("", "</details>", "");
+    out.push(...moreNote(MAX_LIST_ROWS, agg.rubric.length), "", "</details>", "");
   }
   if (r.fileFindings?.length) {
     out.push("### Other LLM findings", "");
-    for (const f of r.fileFindings) out.push(`- ${escapeMd(f.path)}: ${escapeMd(f.message)}`);
-    out.push("");
+    for (const f of r.fileFindings.slice(0, MAX_LIST_ROWS)) out.push(`- ${escapeMd(f.path)}: ${escapeMd(f.message)}`);
+    out.push(...moreNote(MAX_LIST_ROWS, r.fileFindings.length), "");
   }
   for (const n of r.notes) out.push(`> \u26A0\uFE0F ${escapeMd(n)}`, "");
-  out.push("---", "", renderFeedback(agg.rubric ?? []), "");
-  out.push(
+  const head = out.join("\n");
+  const tail = ["---", "", renderFeedback(agg.rubric ?? []), ""];
+  tail.push(
     `<sub>Mode: ${escapeMd(r.mode)} \xB7 ~${r.tokensEstimate} tokens (estimate)` + (r.policyFiles?.length ? ` \xB7 Policy: ${r.policyFiles.map((p) => escapeMd(p.path) + (p.truncated ? " (truncated)" : "")).join(", ")}` : "") + (r.breakdown ? ` \xB7 tokens system ${r.breakdown.system}/policy ${r.breakdown.policy}/rubric ${r.breakdown.rubric}/diff ${r.breakdown.diff}${r.breakdown.context ? `/context ${r.breakdown.context}` : ""}${r.breakdown.tools ? `/tools ${r.breakdown.tools} (${r.breakdown.tool_calls ?? 0} calls)` : ""}/out ${r.breakdown.output}` : "") + ` \xB7 MergeJudge never merges PRs itself</sub>`
   );
-  return out.join("\n");
+  return capBody(head, "\n" + tail.join("\n"));
 }
 var CHECK_NAME = "mergejudge/lane";
 var CHECK_CONCLUSION = {
@@ -54786,9 +54808,9 @@ function checkSummary(agg) {
   const n = (l) => agg.files.filter((f) => f.lane === l).length;
   return {
     title: `Lane: ${agg.lane}`,
-    summary: `${renderLaneExplanation(agg)}
+    summary: capBody(renderLaneExplanation(agg), `
 
-${EMOJI[agg.lane]} Overall lane **${agg.lane}** \u2014 ${n("auto")} auto, ${n("review")} review, ${n("block")} block file(s).`
+${EMOJI[agg.lane]} Overall lane **${agg.lane}** \u2014 ${n("auto")} auto, ${n("review")} review, ${n("block")} block file(s).`)
   };
 }
 
@@ -54996,9 +55018,24 @@ function isLearningBranchHead(headRef, learningBranch) {
 }
 
 // core/github.ts
-async function fetchPrFiles(ok, r, pull) {
-  const files = await ok.paginate(ok.rest.pulls.listFiles, { ...r, pull_number: pull, per_page: 100 });
-  return files.map((f) => ({
+var UNLISTED_FILES_PATH = "(more files not listed)";
+async function fetchPrFiles(ok, r, pull, maxFiles) {
+  const opts = { ...r, pull_number: pull, per_page: 100 };
+  let files;
+  let more = false;
+  if (maxFiles === void 0) files = await ok.paginate(ok.rest.pulls.listFiles, opts);
+  else {
+    files = [];
+    for await (const page of ok.paginate.iterator(ok.rest.pulls.listFiles, opts)) {
+      files.push(...page.data);
+      if (files.length > maxFiles) {
+        more = true;
+        break;
+      }
+    }
+    if (files.length > maxFiles) files.length = maxFiles;
+  }
+  const listed = files.map((f) => ({
     path: f.filename,
     status: f.status,
     additions: f.additions,
@@ -55006,6 +55043,8 @@ async function fetchPrFiles(ok, r, pull) {
     patch: f.patch,
     previousPath: f.previous_filename
   }));
+  if (more) listed.push({ path: UNLISTED_FILES_PATH, status: "modified", additions: 0, deletions: 0, patch: void 0, previousPath: void 0 });
+  return listed;
 }
 async function upsertStickyComment(ok, r, pull, body) {
   const comments = await ok.paginate(ok.rest.issues.listComments, { ...r, issue_number: pull, per_page: 100 });
@@ -56050,6 +56089,7 @@ async function gatherContext(files, src, opts = {}, log = () => {
 
 // core/deepindex.ts
 var INLINE_LIMITS = { maxFiles: 300, maxFileBytes: 1e5, maxTotalBytes: 3e6, maxMs: 2e4, chunkLines: 40, maxChunksPerFile: 60, concurrency: 8 };
+var JOB_LIMITS = { maxFiles: 2e3, maxFileBytes: 1e5, maxTotalBytes: 12e6, maxMs: 3e5, chunkLines: 40, maxChunksPerFile: 60, concurrency: 8 };
 var CODE_EXT = /\.(?:[mc]?[jt]sx?|py)$/;
 var CONFIG_EXT = /\.(?:json|ya?ml|toml)$/;
 var SKIP_DIRS = /(?:^|\/)(?:node_modules|dist|build|out|coverage|vendor|\.git|\.next|__pycache__|\.venv|migrations)\//;
@@ -57323,7 +57363,7 @@ function createProvider(cfg, env = process.env, bindings = {}) {
 async function produceReviewResult(o) {
   const { pr, cfg, cfgRef, files, provider, log } = o;
   const number4 = pr.number;
-  const notes = [];
+  const notes = [...o.reviewNotes ?? []];
   if (isLearningBranchHead(pr.head?.ref, cfg.learning.branch)) {
     const proposal = isProposalBranchHead(pr.head?.ref);
     const reason = proposal ? "learning proposal: only a human may merge it" : "learning branch `" + cfg.learning.branch + "` must never be merged";
@@ -57356,7 +57396,9 @@ async function produceReviewResult(o) {
     };
   }
   const labels = (pr.labels ?? []).map((l) => l.name);
-  if (o.providerNote && cfg.provider.type !== "none") notes.push(`LLM disabled (${!provider && o.keyNote || o.providerNote}); rules-only.`);
+  if (o.skipAi) notes.push(o.skipAi);
+  else if (o.providerNote && cfg.provider.type !== "none") notes.push(`LLM disabled (${!provider && o.keyNote || o.providerNote}); rules-only.`);
+  if (o.noProviderNote && !o.skipAi && cfg.provider.type === "none" && !provider) notes.push(o.noProviderNote);
   let llm = null;
   let policies = { text: "", used: [], skipped: [] };
   let tokens2 = 0;
@@ -57385,11 +57427,23 @@ async function produceReviewResult(o) {
     let mode = cfg.review.mode;
     let tools;
     let retrievedDeep = false;
-    if (mode === "deep" && o.retrieved) {
+    let retrieved = mode === "deep" ? o.retrieved : void 0;
+    if (mode === "deep" && !retrieved && o.retrieveDeep) {
+      try {
+        const r = await o.retrieveDeep(kept);
+        retrieved = { pieces: r.pieces, ok: true, notes: r.notes };
+      } catch (e) {
+        const why = e.message;
+        notes.push(`Deep mode unavailable (${why}); used context mode.`);
+        log.warning(`deep mode: ${why}; falling back to context`);
+        mode = "context";
+      }
+    }
+    if (mode === "deep" && retrieved) {
       mode = "context";
-      context3 = o.retrieved.pieces;
-      retrievedDeep = o.retrieved.ok;
-      notes.push(...o.retrieved.notes);
+      context3 = retrieved.pieces;
+      retrievedDeep = retrieved.ok;
+      notes.push(...retrieved.notes);
     } else if (mode === "deep") {
       const fallback = (why) => {
         mode = "context";
@@ -57469,10 +57523,26 @@ async function produceReviewResult(o) {
     }
   };
 }
+function checkFallbackNote(lane, status) {
+  return `> \u2139\uFE0F The \`${CHECK_NAME}\` check run could not be created${status ? ` (HTTP ${status})` : ""}, usually because the token is read-only (for example on a fork PR) or lacks \`checks: write\`. Lane: ${EMOJI[lane]} \`${lane}\`. A branch rule that requires this check will not see it.`;
+}
 async function postReviewResult(r, c) {
   const { ok, repo, cfg, log } = c;
   await upsertStickyComment(ok, repo, r.prNumber, r.body);
-  await createCheckRun(ok, repo, r.headSha, r.agg);
+  try {
+    await createCheckRun(ok, repo, r.headSha, r.agg);
+  } catch (e) {
+    const status = e.status;
+    if (status !== 403 && status !== 404 && status !== 422) throw e;
+    log.warning(`Could not create the ${CHECK_NAME} check run (${status ?? "error"}: ${e.message}); the lane is in the PR comment instead.`);
+    try {
+      await upsertStickyComment(ok, repo, r.prNumber, `${r.body}
+
+${checkFallbackNote(r.lane, status)}`);
+    } catch (e2) {
+      log.warning(`Could not update the PR comment either: ${e2.message}`);
+    }
+  }
   if (r.kind === "learning-block") {
     log.info("Blocked: head ref is learning branch " + cfg.learning.branch + ".");
     return "block";
@@ -57513,8 +57583,11 @@ async function runReview(o) {
   const { ok, repo, pr, cfg, cfgRef } = o;
   const env = o.env ?? process.env;
   const learning = isLearningBranchHead(pr.head?.ref, cfg.learning.branch);
-  const files = learning ? [] : await fetchPrFiles(ok, repo, pr.number);
-  const { provider, note } = learning ? { provider: null, note: void 0 } : createProvider(cfg.provider, env, { ...o.bindings, onCall: o.onLlmCall });
+  const files = learning ? [] : await fetchPrFiles(ok, repo, pr.number, o.maxListFiles);
+  const unlisted = files.some((f) => f.path === UNLISTED_FILES_PATH);
+  const skipAi = learning ? void 0 : o.skipAi ?? o.skipAiGate?.(files) ?? void 0;
+  const reviewNotes = unlisted && !skipAi ? [...o.reviewNotes ?? [], `This PR has more than ${o.maxListFiles} files; only the first ${o.maxListFiles} were checked and the lane is at least review.`] : o.reviewNotes;
+  const { provider, note } = learning || skipAi ? { provider: null, note: void 0 } : createProvider(cfg.provider, env, { ...o.bindings, onCall: o.onLlmCall });
   const result = await produceReviewResult({
     ref: `${repo.owner}/${repo.repo}#${pr.number}`,
     pr,
@@ -57524,9 +57597,13 @@ async function runReview(o) {
     provider,
     providerNote: note,
     keyNote: o.keyNote,
+    noProviderNote: o.noProviderNote,
+    reviewNotes,
+    skipAi,
     readRepoFile: (p, ref) => fetchRepoFile(ok, repo, p, ref),
     contextSource: o.contextSource ?? githubContextSource(ok, repo, pr.head.sha),
     deep: o.deep,
+    retrieveDeep: o.retrieveDeep,
     learned: o.learned,
     lessons: o.lessons,
     outcomeStats: o.outcomeStats,
@@ -57543,6 +57620,379 @@ async function runReview(o) {
     onResult: o.onResult,
     onSnapshot: o.onSnapshot
   });
+}
+
+// src/workspace.ts
+var import_node_fs = require("node:fs");
+var import_node_path = require("node:path");
+
+// core/deepretrieve.ts
+var DEEP_RETRIEVE_DEFAULTS = { max_bytes: 8e4, max_files: 60, max_symbols: 8, max_callers: 5, max_file_bytes: 12e3 };
+var DEEP_HOP_DEFAULTS = {
+  max_importers: 6,
+  max_hop2_importers: 6,
+  max_hop2_imports: 4,
+  max_examine: 40,
+  max_literals: 12,
+  max_literal_files: 8,
+  literal_common_files: 25,
+  max_scan_bytes: 8e6,
+  literal_piece_bytes: 6e3,
+  max_ms: 3e3
+};
+function snapshotText(snap, path2) {
+  const f = snap.files[path2];
+  if (!f) return null;
+  const lines = [];
+  for (const c of f.chunks) {
+    const parts = c.text.split("\n");
+    for (let i = 0; i < parts.length; i++) lines[c.start - 1 + i] = parts[i];
+  }
+  for (let i = 0; i < lines.length; i++) lines[i] ??= "";
+  return lines.join("\n");
+}
+function snapshotSource(snap) {
+  return {
+    listPaths: async () => Object.keys(snap.files),
+    readFile: async (p) => snapshotText(snap, p),
+    searchSymbol: async (sym) => [...new Set(findReferences(snap, sym, 80).map((h) => h.path))]
+  };
+}
+var baseName = (p) => p.replace(/\.[^./]+$/, "").split("/").pop();
+var escapeRe2 = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+var wholeToken = (lit) => new RegExp(`(?<![\\w$])${escapeRe2(lit)}(?![\\w$])`);
+var COMMON_LITERALS = /* @__PURE__ */ new Set([
+  "use strict",
+  "utf8",
+  "utf-8",
+  "string",
+  "number",
+  "object",
+  "boolean",
+  "function",
+  "undefined",
+  "default",
+  "error",
+  "data",
+  "json",
+  "true",
+  "false",
+  "null",
+  "none",
+  "type",
+  "name",
+  "value",
+  "values",
+  "test",
+  "index",
+  "main",
+  "node",
+  "content-type",
+  "application/json",
+  "text/plain",
+  "text/html",
+  "GET",
+  "POST",
+  "PUT",
+  "DELETE",
+  "PATCH",
+  "HEAD",
+  "message",
+  "status",
+  "result",
+  "results",
+  "items",
+  "length",
+  "key",
+  "keys",
+  "path",
+  "file",
+  "text",
+  "info",
+  "warn",
+  "debug",
+  "require",
+  "exports",
+  "module",
+  "string",
+  "return",
+  "async",
+  "await",
+  "const",
+  "this",
+  "self",
+  "class"
+]);
+function distinct(t) {
+  let sc = Math.min(t.length, 24) / 4;
+  if (/[._:/-]/.test(t)) sc += 3;
+  if (/[a-z][A-Z]/.test(t) || /^[A-Z0-9_]{4,}$/.test(t)) sc += 2;
+  if (/\d/.test(t)) sc += 1;
+  return sc;
+}
+function patchLiterals(patch, max = DEEP_HOP_DEFAULTS.max_literals) {
+  if (!patch) return [];
+  const seen = /* @__PURE__ */ new Map();
+  const note = (text, kind, removed) => {
+    if (text.length < 3 || text.length > 80 || /\s/.test(text) || COMMON_LITERALS.has(text) || /^[\d._-]+$/.test(text)) return;
+    if (/^[./]|^@[\w-]+\/|^node:/.test(text)) return;
+    const e = seen.get(text) ?? { removed: false, added: false, kind };
+    if (removed) e.removed = true;
+    else e.added = true;
+    if (kind === "env") e.kind = "env";
+    seen.set(text, e);
+  };
+  for (const line of patch.split("\n")) {
+    if (!/^[+-]/.test(line) || /^(\+\+\+|---)/.test(line) || line.length > 600) continue;
+    const removed = line[0] === "-";
+    const l = line.slice(1);
+    if (/^\s*(?:import\b|export\s[^'"]*\sfrom\b|from\s+\S+\s+import\b)|\brequire\s*\(/.test(l)) continue;
+    for (const m of l.matchAll(/process\.env\.([A-Za-z_]\w*)|import\.meta\.env\.([A-Za-z_]\w*)|\benv\.([A-Z_][A-Z0-9_]*)|(?:process\.env|os\.environ|env)\[\s*['"]([A-Za-z_]\w*)['"]\s*\]|os\.(?:getenv|environ\.get)\(\s*['"]([A-Za-z_]\w*)['"]/g))
+      note(m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5], "env", removed);
+    for (const m of l.matchAll(/(["'`])((?:\\.|(?!\1)[^\\$])*?)\1/g)) note(m[2], "string", removed);
+    for (const m of l.matchAll(/(?:^|[{,(])\s*["']?([A-Za-z_$][\w$-]{4,})["']?\s*:(?!:)/g)) note(m[1], "key", removed);
+    for (const m of l.matchAll(/\.([a-z][\w$]*[A-Z][\w$]*)\b/g)) note(m[1], "key", removed);
+  }
+  const out = [...seen].map(([text, e]) => ({ text, kind: e.kind, side: e.removed && e.added ? "both" : e.removed ? "removed" : "added" }));
+  const rank = (x) => (x.side === "removed" ? 4 : x.side === "added" ? 2 : 0) + (x.kind === "env" ? 3 : 0) + distinct(x.text);
+  return out.sort((a, b) => rank(b) - rank(a) || (a.text < b.text ? -1 : 1)).slice(0, max);
+}
+async function retrieveDeepContext(snap, files, opts = {}, log = () => {
+}) {
+  const t0 = Date.now();
+  const { max_importers, max_hop2_importers, max_hop2_imports, max_examine, max_literals, max_literal_files, literal_common_files, max_scan_bytes, literal_piece_bytes, max_ms } = { ...DEEP_HOP_DEFAULTS, ...opts };
+  const o = { ...DEEP_RETRIEVE_DEFAULTS, ...opts };
+  const src = snapshotSource(snap);
+  const g = await gatherContext(files, src, o, log);
+  const pieces = g.pieces.slice();
+  let bytes = g.bytes;
+  const seen = /* @__PURE__ */ new Set([...pieces.map((p) => p.path), ...files.map((f) => f.path)]);
+  const symbols = [...new Set(files.flatMap((f) => changedSymbols(f.patch)))];
+  const timeUp = () => Date.now() - t0 > max_ms;
+  const full = () => o.max_bytes - bytes < 512 || pieces.length >= o.max_files;
+  const stats = { hop1: 0, literal: 0, hop2: 0, scanned: 0, timedOut: false };
+  const addPiece = (path2, text, kind, why, re, cap0 = o.max_file_bytes) => {
+    const cap = Math.min(o.max_bytes - bytes, cap0);
+    const truncated = text.length > cap;
+    const lines = text.split("\n");
+    const hit = re ? lines.flatMap((l, i) => re.test(l) ? [[i + 1, i + 1]] : []) : [];
+    const content = truncated ? excerpt(text, hit.length ? hit : [[1, 40]], cap) : text;
+    pieces.push({ path: path2, kind, why: why + (truncated ? ", excerpt around relevant lines" : ""), content, truncated });
+    bytes += content.length;
+    seen.add(path2);
+    return true;
+  };
+  const symRe = (names) => new RegExp(names.map((n) => escapeRe2(n)).join("|"));
+  const rankCandidates = (cands, needles) => {
+    const out = [];
+    const uniq = [...new Set(cands)].filter((c) => !seen.has(c) && !o.skip?.(c) && !isSensitivePath(c)).sort();
+    const re = needles.length ? symRe(needles) : null;
+    for (const c of uniq.slice(0, max_examine)) {
+      if (timeUp()) {
+        stats.timedOut = true;
+        break;
+      }
+      const text = snapshotText(snap, c);
+      if (text !== null) out.push({ path: c, text, rel: re ? re.test(text) : false });
+    }
+    return out.sort((a, b) => Number(b.rel) - Number(a.rel));
+  };
+  const hop1 = g.pieces.filter((x) => x.kind === "caller").map((x) => ({
+    path: x.path,
+    via: files.find((f) => importersOf(snap, f.path).includes(x.path))?.path ?? files[0]?.path ?? "a changed file"
+  }));
+  for (const f of files) {
+    if (f.status === "removed" || full() || timeUp()) continue;
+    const needles = [baseName(f.path), ...symbols];
+    for (const c of rankCandidates(importersOf(snap, f.path), needles)) {
+      if (stats.hop1 >= max_importers || full() || seen.has(c.path)) continue;
+      addPiece(c.path, c.text, "caller", `imports ${f.path}`, symRe(needles));
+      hop1.push({ path: c.path, via: f.path });
+      stats.hop1++;
+    }
+  }
+  if (!full() && !timeUp() && max_literals > 0 && max_literal_files > 0) {
+    const lits = /* @__PURE__ */ new Map();
+    for (const f of files) for (const l of patchLiterals(f.patch, max_literals)) {
+      const e = lits.get(l.text);
+      if (e) {
+        e.from.push(f.path);
+        if (e.side !== l.side) e.side = "both";
+      } else lits.set(l.text, { ...l, from: [f.path] });
+    }
+    const list2 = [...lits.values()].slice(0, max_literals);
+    if (list2.length) {
+      const changed = new Set(files.map((f) => f.path));
+      const res = list2.map((l) => wholeToken(l.text));
+      const hits = list2.map(() => /* @__PURE__ */ new Map());
+      const common = list2.map(() => false);
+      let scanned = 0;
+      scan: for (const [path2, fe] of Object.entries(snap.files)) {
+        if (changed.has(path2) || o.skip?.(path2) || isSensitivePath(path2)) continue;
+        if (timeUp()) {
+          stats.timedOut = true;
+          break;
+        }
+        for (const c of fe.chunks) {
+          scanned += c.text.length;
+          if (scanned > max_scan_bytes) break scan;
+          for (let i = 0; i < list2.length; i++) {
+            if (common[i] || !c.text.includes(list2[i].text) || !res[i].test(c.text)) continue;
+            const m = hits[i];
+            if (!m.has(path2) && m.size >= literal_common_files) {
+              common[i] = true;
+              m.clear();
+              continue;
+            }
+            const lines = m.get(path2) ?? [];
+            c.text.split("\n").forEach((l, j) => {
+              if (l.includes(list2[i].text) && res[i].test(l)) lines.push(c.start + j);
+            });
+            m.set(path2, lines);
+          }
+        }
+      }
+      stats.scanned = scanned;
+      const byFile = /* @__PURE__ */ new Map();
+      list2.forEach((l, i) => {
+        for (const [path2, lines] of hits[i]) {
+          const e = byFile.get(path2) ?? { score: 0, lits: [], lines: [] };
+          e.score += (l.side === "removed" ? 3 : l.side === "both" ? 1 : 2) + distinct(l.text) / 10;
+          e.lits.push(i);
+          e.lines.push(...lines);
+          byFile.set(path2, e);
+        }
+      });
+      const near = new Set(hop1.map((h) => h.path));
+      const ranked = [...byFile].filter(([p]) => !seen.has(p)).sort((a, b) => b[1].score - a[1].score || Number(near.has(b[0])) - Number(near.has(a[0])) || (a[0] < b[0] ? -1 : 1));
+      for (const [path2, e] of ranked) {
+        if (stats.literal >= max_literal_files || full()) break;
+        const text = snapshotText(snap, path2);
+        if (text === null) continue;
+        const names = e.lits.slice(0, 3).map((i) => `${JSON.stringify(list2[i].text)} (${list2[i].side === "removed" ? "removed" : list2[i].side === "added" ? "added" : "changed"} in ${list2[i].from[0]})`);
+        const re = symRe(e.lits.map((i) => list2[i].text));
+        addPiece(path2, text, "caller", `references literal ${names.join(", ")} changed in this PR; may depend on the old or new value`, re, literal_piece_bytes);
+        stats.literal++;
+      }
+    }
+  }
+  if (!full() && !timeUp() && (max_hop2_importers > 0 || max_hop2_imports > 0)) {
+    for (const h of hop1) {
+      if (stats.hop2 >= max_hop2_importers || full()) break;
+      const needles = [baseName(h.path), ...symbols];
+      for (const c of rankCandidates(importersOf(snap, h.path), needles)) {
+        if (stats.hop2 >= max_hop2_importers || full()) break;
+        addPiece(c.path, c.text, "caller", `imports ${h.path}, which imports ${h.via} (2 hops from the changed file)`, symRe(needles));
+        stats.hop2++;
+      }
+    }
+    let imp2 = 0;
+    const pathSet = new Set(Object.keys(snap.files));
+    for (const p of g.pieces.filter((x) => x.kind === "import")) {
+      if (imp2 >= max_hop2_imports || full() || timeUp()) break;
+      const targets = (snap.files[p.path]?.imports ?? []).map((spec) => resolveImport(p.path, spec, pathSet)).filter((t) => !!t);
+      for (const c of rankCandidates(targets, symbols)) {
+        if (imp2 >= max_hop2_imports || full()) break;
+        addPiece(c.path, c.text, "import", `imported by ${p.path}, which a changed file imports (2 hops)`, symbols.length ? symRe(symbols) : null);
+        imp2++;
+        stats.hop2++;
+      }
+    }
+  }
+  log(`deep: ${pieces.length} piece(s), ${bytes} bytes retrieved from the index (hop1 importers ${stats.hop1}, literal refs ${stats.literal}, hop2 ${stats.hop2}, ${stats.scanned} bytes scanned, ${Date.now() - t0} ms${stats.timedOut ? ", time budget hit" : ""})`);
+  return { pieces, bytes };
+}
+
+// src/git.ts
+var import_node_child_process = require("node:child_process");
+var GitError = class extends Error {
+  constructor(message, code, stderr) {
+    super(message);
+    this.code = code;
+    this.stderr = stderr;
+  }
+  code;
+  stderr;
+};
+var scrubUrl = (s) => s.replace(/(\w+:\/\/)[^/@\s]+@/g, "$1***@");
+function runGit(args, o = {}) {
+  return new Promise((resolve2, reject) => {
+    const env = { ...process.env, ...o.env, GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" };
+    const child = (0, import_node_child_process.spawn)("git", ["-c", "core.quotePath=false", ...args], { cwd: o.cwd, env, stdio: ["pipe", "pipe", "pipe"], signal: o.signal });
+    const out = [], err = [];
+    let size = 0, over = false;
+    const max = o.maxBytes ?? 64 * 1024 * 1024;
+    child.stdout.on("data", (d) => {
+      size += d.length;
+      if (size > max) {
+        over = true;
+        child.kill("SIGKILL");
+      } else out.push(d);
+    });
+    child.stderr.on("data", (d) => {
+      if (err.reduce((n, b) => n + b.length, 0) < 64e3) err.push(d);
+    });
+    child.on("error", (e) => reject(new GitError(`could not run git: ${e.message}`, null, "")));
+    child.on("close", (code) => {
+      const stderr = scrubUrl(Buffer.concat(err).toString("utf8"));
+      if (over) return reject(new GitError(`git ${args[0]} output exceeded ${max} bytes`, code, stderr));
+      const res = { code: code ?? -1, stdout: Buffer.concat(out).toString("utf8"), stderr };
+      if (res.code !== 0 && !o.allowFail) return reject(new GitError(`git ${args[0]} failed (${res.code}): ${stderr.trim().slice(0, 400)}`, res.code, stderr));
+      resolve2(res);
+    });
+    child.stdin.on("error", () => {
+    });
+    child.stdin.end(o.input ?? "");
+  });
+}
+
+// src/workspace.ts
+var WORKSPACE_LIMITS = { ...JOB_LIMITS, maxFiles: 5e3, maxTotalBytes: 5e7, maxMs: 12e4 };
+var MAX_READ_BYTES = 1e6;
+var WorkspaceError = class extends Error {
+};
+var WorkspaceSource = class {
+  root;
+  constructor(dir) {
+    try {
+      this.root = (0, import_node_fs.realpathSync)(dir);
+    } catch {
+      throw new WorkspaceError(`workspace ${dir} does not exist`);
+    }
+  }
+  async listPaths() {
+    const r = await runGit(["ls-files", "-z", "--cached"], { cwd: this.root, allowFail: true, maxBytes: 64 * 1024 * 1024 });
+    if (r.code !== 0) throw new WorkspaceError("the workspace is not a git checkout (add an actions/checkout step before MergeJudge)");
+    return r.stdout.split("\0").filter(Boolean);
+  }
+  async readFile(path2) {
+    const abs = (0, import_node_path.resolve)(this.root, path2);
+    if (abs !== this.root && !abs.startsWith(this.root + import_node_path.sep)) return null;
+    try {
+      const st = (0, import_node_fs.lstatSync)(abs);
+      if (!st.isFile() || st.size > MAX_READ_BYTES) return null;
+      const real = (0, import_node_fs.realpathSync)(abs);
+      if (!real.startsWith(this.root + import_node_path.sep)) return null;
+      const buf = (0, import_node_fs.readFileSync)(real);
+      return buf.includes(0) ? null : buf.toString("utf8");
+    } catch {
+      return null;
+    }
+  }
+};
+async function retrieveFromWorkspace(dir, kept, cfg, repoName, log, limits = WORKSPACE_LIMITS) {
+  const src = new WorkspaceSource(dir);
+  const head = (await runGit(["rev-parse", "HEAD"], { cwd: dir, allowFail: true })).stdout.trim() || "workspace";
+  const built = await buildIndex(src, { repo: repoName, sha: head }, limits).catch((e) => {
+    if (e instanceof WorkspaceError) throw e;
+    throw new WorkspaceError(`could not list the workspace files: ${e.message}`);
+  });
+  if (!built.snapshot) throw new WorkspaceError("could not list the workspace files");
+  const skip = (p) => excludeFromLlm([{ path: p }], cfg.diff_exclude).skipped.length > 0;
+  const r = await retrieveDeepContext(built.snapshot, kept, { skip }, log);
+  const notes = [`Deep mode from the Actions checkout (${head.slice(0, 7)}): repo context was retrieved from an in-memory index of the checked-out files and reviewed in one pass (no tool calls).`];
+  if (built.snapshot.partial) notes.push(`index is partial (${built.snapshot.partial.indexed}/${built.snapshot.partial.total} files: ${built.snapshot.partial.reason})`);
+  return { pieces: r.pieces, notes };
 }
 
 // src/action.ts
@@ -57602,6 +58052,12 @@ async function runTriageMode() {
     cfgRef,
     appToken,
     botLogin,
+    // review.mode: deep reads the repo from the actions/checkout workspace; without one it falls back to context mode.
+    retrieveDeep: async (kept) => {
+      const dir = process.env.GITHUB_WORKSPACE;
+      if (!dir) throw new WorkspaceError("GITHUB_WORKSPACE is not set");
+      return retrieveFromWorkspace(dir, kept, cfg, `${repo.owner}/${repo.repo}`, info);
+    },
     log: { info, warning }
   });
   setOutput("lane", lane);

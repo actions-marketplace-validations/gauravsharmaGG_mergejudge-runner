@@ -24,17 +24,29 @@ name: MergeJudge
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created, edited]
+  schedule:
+    # Weekly proposal: Mondays 09:00 UTC (adjust as you like).
+    - cron: "0 9 * * 1"
+  workflow_dispatch: {}
 permissions:
-  contents: read
+  contents: write          # store lessons + open the proposal PR
   pull-requests: write
   checks: write
 jobs:
   lane:
+    # Skip noisy issue_comment events that are not MergeJudge feedback (saves minutes).
+    if: >
+      github.event_name != 'issue_comment' ||
+      contains(github.event.comment.body, 'MergeJudge') ||
+      startsWith(github.event.comment.body, '/mergejudge')
     runs-on: ubuntu-latest
     steps:
       - uses: gauravsharmaGG/mergejudge-runner@v1
         env:
           # Bring your own key: store it as a repository secret and name it here.
+          # Omit (or set provider: none) for rules-only reviews.
           MJ_API_KEY: ${{ secrets.MJ_API_KEY }}
         with:
           provider: anthropic          # or openai-compatible, or none for rules-only
@@ -44,8 +56,14 @@ jobs:
 
 No `actions/checkout` step is needed: the Action reads `.mergejudge.yml` from the pull request's base branch through the API, and reads the diff from the API. Without a config file it uses built-in defaults.
 
-- **Inputs.** `github_token` (defaults to the workflow token), `app_id` / `app_private_key` (optional GitHub App credentials), `mode`, `config_path`, `provider`, `base_url`, `model`, `api_key_env`. Output: `lane`.
-- **Modes.** `triage` reviews a pull request (default on `pull_request`). `feedback` records review feedback from `issue_comment` events, and `propose` opens a learning proposal PR on `schedule` or `workflow_dispatch`; both of these store data on a `mergejudge-learning` branch, so they need `contents: write` and a workflow that triggers them. Plain `pull_request` use needs only the permissions shown above. All three modes are available in this Action.
+**How learning works in the Action**
+
+1. **Signals (feedback).** On `issue_comment` (created/edited), mode `feedback` records a lesson when a write-access human ticks the feedback checkboxes on the MergeJudge sticky comment, or posts `/mergejudge learn …`. Lessons are appended to `lessons/lessons.jsonl` on the `mergejudge-learning` branch (created from the default branch on first write). Merge or revert alone does **not** create Action lessons — those outcomes are a hosted-Worker path. The Action only learns from explicit feedback on the PR.
+2. **Weekly proposal.** On `schedule` or `workflow_dispatch`, mode `propose` reads those lessons and, when there are enough (`learning.propose_after`, default 10), opens or updates a PR (`mergejudge/proposal-learning` → default branch) that may suggest guarded edits to `.mergejudge.yml` (more protected paths / prompt notes only) plus a report file. Labels: `do-not-merge`, `needs-human`.
+3. **Permissions.** Learning needs `contents: write` and `pull-requests: write`. GitHub's default `GITHUB_TOKEN` cannot open PRs unless the repository setting **Allow GitHub Actions to create and approve pull requests** is on (Settings → Actions → General → Workflow permissions).
+
+- **Inputs.** `github_token` (defaults to the workflow token), `app_id` / `app_private_key` (optional GitHub App credentials), `mode` (`auto` | `triage` | `feedback` | `propose`), `config_path`, `provider`, `base_url`, `model`, `api_key_env`. Outputs: `lane`, `proposal_pr`.
+- **Modes.** `auto` (default) picks from the event: `pull_request` → triage, `issue_comment` → feedback, `schedule` / `workflow_dispatch` → propose. All three modes are available in this Action.
 - **Fork pull requests.** For `pull_request` events from forks, GitHub gives the workflow a read-only token and no secrets. The review code in this repository does not yet have a fallback for that case: posting the comment is rejected by GitHub, and the step fails instead of falling back to a rules-only comment. The same-repository case is unaffected. If you need to avoid failures on forks, run the Action only for same-repository branches (`if: github.event.pull_request.head.repo.full_name == github.repository` on the job) until the fallback is synced into this repository.
 - **Version.** The `@v1` tag will be published by the repository owner. Until it exists, pin a commit SHA instead.
 - **Build.** The Action runs the committed bundle `action/index.cjs` on Node 24, built from `src/action.ts` and `core/` with `npm run build:action`. A test fails if the committed bundle is out of date.

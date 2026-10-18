@@ -52,3 +52,64 @@ export interface RunnerJobPayload {
  * 0.4.0 never get this (the job has mode `deep-local`, which only runners announcing the `local-code` feature lease).
  */
 export type LocalJobPayload = Omit<RunnerJobPayload, "v" | "context" | "deep"> & { v: typeof LOCAL_PAYLOAD_VERSION; codeSource: "local" };
+
+// ---- Device sign-in (`mergejudge-runner login`): POST /runner/v1/device/start and /runner/v1/device/poll ----
+
+/** Response of POST /runner/v1/device/start (request body: `{}`). */
+export interface DeviceStartResponse {
+  /** Opaque handle for this sign-in attempt. A secret: send it only to /device/poll, never print or log it. */
+  session: string;
+  /** Code the user types at `verification_uri`. */
+  user_code: string;
+  verification_uri: string;
+  /** Minimum seconds between polls. */
+  interval: number;
+  /** Seconds until the sign-in attempt expires. */
+  expires_in: number;
+}
+
+/** A GitHub App installation the signed-in user may add a runner to. */
+export interface DeviceInstallation { id: number; account: string }
+
+/** Body of POST /runner/v1/device/poll: the session plus the same capability fields as /runner/v1/register. */
+export interface DevicePollRequest {
+  session: string;
+  name?: string;
+  /** Pick this installation (needed after `choose_installation`, or to skip the choice). */
+  installation_id?: number;
+  engines: string[];
+  capabilities: unknown[];
+  modes: string[];
+  limits?: unknown;
+  concurrency: number;
+  version: string;
+  features: string[];
+  labels: string[];
+}
+
+/** Same fields as the /runner/v1/register response (HTTP 200 or 201). */
+export interface DeviceRegistered {
+  state: "registered";
+  protocol: "v1";
+  runnerId: string;
+  installationId: number;
+  accessToken: string;
+  expiresAt: string;
+}
+
+/** Response of POST /runner/v1/device/poll, discriminated by `state`. */
+export type DevicePollResponse =
+  | { state: "pending"; interval: number }
+  | { state: "slow_down"; interval: number }
+  | { state: "expired" }
+  | { state: "denied" }
+  | { state: "choose_installation"; installations: DeviceInstallation[] }
+  | { state: "no_installation"; install_url: string }
+  | DeviceRegistered;
+
+/** `error` values of the non-2xx answers of the device endpoints (429 also carries Retry-After). */
+export type DeviceErrorCode =
+  | "installation_forbidden" | "not_admin" | "runner_limit" | "installation_gone" | "installation_suspended" // 403
+  | "unknown_session" // 404
+  | "rate_limited" // 429
+  | "device_flow_unavailable"; // 503

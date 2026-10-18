@@ -2,7 +2,7 @@
 
 Runs the AI step of a [MergeJudge](https://mergejudge.si) review on **your own machine**, with your own Claude Code or Codex (ChatGPT) login, or a GLM (z.ai) API key. The MergeJudge service keeps handling GitHub events, lanes, the panel and posting; the runner connects **out** over HTTPS (protocol `/runner/v1`), takes review jobs, and sends back a result. No inbound ports.
 
-The runner is not standalone: it connects to the MergeJudge hosted service, which is **invite-only for now**, and needs an enrollment code from the MergeJudge panel (Runners > Add runner). This repository contains the open-source runner (MIT) and the review core it bundles.
+The runner is not standalone: it connects to the MergeJudge service and needs the MergeJudge GitHub App installed on the GitHub account or organisation whose pull requests it should review. You sign in with GitHub to register it (or use an enrollment code from the MergeJudge panel). This repository contains the open-source runner (MIT) and the review core it bundles.
 
 ## Privacy: what MergeJudge's servers see
 
@@ -75,14 +75,22 @@ Needs Node >= 20 and, for the default engine, the [Claude Code](https://code.cla
 
 ```sh
 npm i -g mergejudge-runner
-mergejudge-runner setup <code>   # code from the panel: Runners > Add runner
+mergejudge-runner setup          # sign in with GitHub, then pick engines and auto-start
 ```
 
-`setup` registers the runner, detects which of `claude` and `codex` are installed and signed in (`claude auth status`, `codex login status`; Codex counts only when signed in **with ChatGPT**, an API-key login is warned about and codex is not offered), asks yes/no about a GLM (z.ai) API key, and offers to start it at login (launchd / systemd user unit). Flags: `--yes`, `--no-autostart`, `--print-unit`, `--engine <claude-code|codex|glm>`, `--model [engine=]<model>` (repeatable), `--codex-effort <minimal|low|medium|high|xhigh>` (default `low`; stored as `engines.codex.effort` in the config), `--glm-key-env NAME`, `--no-glm`; `MERGEJUDGE_URL` overrides the server (default `https://app.mergejudge.si`). Without a global install, `npx mergejudge-runner setup <code>` works too.
+`setup` prints a short code and an address (`https://github.com/login/device`); open it, enter the code and approve the MergeJudge GitHub App. If you have several installations, pass `--installation <id>` (in a terminal you can also pick from a list). The alternative is an enrollment code from the panel (Runners > Add runner): `mergejudge-runner setup <code>`.
+
+`setup` registers the runner (sign-in or code), detects which of `claude` and `codex` are installed and signed in (`claude auth status`, `codex login status`; Codex counts only when signed in **with ChatGPT**, an API-key login is warned about and codex is not offered), asks yes/no about a GLM (z.ai) API key, and offers to start it at login (launchd / systemd user unit). Flags: `--yes`, `--no-autostart`, `--print-unit`, `--engine <claude-code|codex|glm>`, `--model [engine=]<model>` (repeatable), `--codex-effort <minimal|low|medium|high|xhigh>` (default `low`; stored as `engines.codex.effort` in the config), `--glm-key-env NAME`, `--no-glm`; `MERGEJUDGE_URL` overrides the server (default `https://app.mergejudge.si`). Without a global install, `npx mergejudge-runner setup` works too.
 
 ## Register
 
-Create an enrollment code in the MergeJudge panel (valid 15 minutes, single use), then:
+**Sign in with GitHub (default).** `mergejudge-runner login` (also run by `setup` when you give no code) uses GitHub's device flow: it shows a code and an address, waits while you approve the MergeJudge GitHub App in your browser, then registers this machine and saves the config. Options: `--name`, `--installation <id>` (needed when you have several installations and no terminal to pick in), `--url`, `--force`, plus the engine flags of `register`. If the App is not installed yet, the command prints the install address. The sign-in attempt lasts a few minutes; run the command again if it expires. Your GitHub login token is never given to the runner; only the runner's own token is stored.
+
+```sh
+mergejudge-runner login --name my-mac
+```
+
+**With an enrollment code (alternative).** Create an enrollment code in the MergeJudge panel (valid 15 minutes, single use), then:
 
 ```sh
 mergejudge-runner register --code mjr_e_... --url https://app.mergejudge.si --name my-mac
@@ -191,6 +199,8 @@ node dist/cli.js --help
 `src/` is the runner (plus `src/action.ts`, the GitHub Action entry point); `core/` is the shared review code (rules, prompts, parsing, result format) vendored from the MergeJudge core, so the prompt, JSON parsing and result format are identical to the service. `core/` is synced by maintainers; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Changelog
+
+- **0.4.8**: `mergejudge-runner login` — sign in with GitHub (device flow) so you can start the runner without the panel enrollment code. Needs Device Flow enabled on the MergeJudge GitHub App.
 
 See the GitHub releases.
 

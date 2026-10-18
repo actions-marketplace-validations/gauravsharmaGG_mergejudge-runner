@@ -9,6 +9,7 @@ import { buildEngineSettings, glmKeyOf, GLM_KEY_ENV, pickDefaultEngine, runnerCa
 import { CODEX_EFFORTS, isCodexEffort } from "./engine.js";
 import { ConfigError, defaultConfigPath, loadConfig, saveConfig, validateUrl, type EngineSettings, type RunnerConfig } from "./config.js";
 import { createLogger, tokenPrefix, type Logger } from "./redact.js";
+import { deviceLogin } from "./login.js";
 import { resolveLocalCode } from "./localcode.js";
 import { runLoop } from "./run.js";
 import { buildUnit, checkCli, cliWarnings, DEFAULT_URL, defaultExec, findOnPath, installAutostart, type ExecFn } from "./setup.js";
@@ -32,6 +33,8 @@ export interface CliDeps {
   /** Path of the running bundle (copied next to the config for auto-start). */
   bundlePath?: string;
   nodePath?: string;
+  /** Test knob: waiting between sign-in polls. */
+  sleep?: (ms: number) => Promise<void>;
   fileExists?: (p: string) => boolean;
 }
 
@@ -39,18 +42,20 @@ const USAGE = `mergejudge-runner ${VERSION}
 
 Usage:
   mergejudge-runner register --code <enrollment-code> --url <https://app.mergejudge.si> [--name <name>] [--engine claude-code|codex|glm] [--model [engine=]<model>]... [--codex-effort minimal|low|medium|high|xhigh] [--glm-key-env NAME] [--claude-bin <path>] [--codex-bin <path>] [--concurrency 1] [--force]
+  mergejudge-runner login [--name <name>] [--installation <id>] [--url <https://app.mergejudge.si>] [--engine claude-code|codex|glm] [--model [engine=]<model>]... [--codex-effort minimal|low|medium|high|xhigh] [--glm-key-env NAME] [--claude-bin <path>] [--codex-bin <path>] [--concurrency 1] [--force] [--yes]
   mergejudge-runner setup [code] [--yes] [--no-autostart] [--print-unit] [--name <name>] [--url <url>] [--engine <name>] [--model [engine=]<model>]... [--codex-effort minimal|low|medium|high|xhigh] [--glm-key-env NAME | --no-glm] [--force]
   mergejudge-runner run [--concurrency 1] [--once] [--claude-bin <path>] [--codex-bin <path>] [--job-timeout-min 10] [--remote-url-template <url with {owner} and {repo}>] [--cache-max-gb 5]
   mergejudge-runner status
 
-setup registers this machine (code from the panel, or prompted), detects which of claude and codex are installed and signed in, asks whether to add a GLM (z.ai, billed per use) API key, and offers to start the runner at login. MERGEJUDGE_URL overrides the default server.
+setup registers this machine (sign in with GitHub, or pass a code from the panel), detects which of claude and codex are installed and signed in, asks whether to add a GLM (z.ai, billed per use) API key, and offers to start the runner at login. MERGEJUDGE_URL overrides the default server.
 
 Common: --config <path> (default: $XDG_CONFIG_HOME or ~/.config /mergejudge-runner/config.json)
 `;
 
 const COMMAND_USAGE: Record<string, string> = {
   register: "mergejudge-runner register --code <enrollment-code> --url <https://app.mergejudge.si> [--name <name>] [--engine claude-code|codex|glm] [--model [engine=]<model>]... [--codex-effort minimal|low|medium|high|xhigh] [--glm-key-env NAME] [--claude-bin <path>] [--codex-bin <path>] [--concurrency 1] [--force]",
-  setup: "mergejudge-runner setup [code] [--yes] [--no-autostart] [--print-unit] [--name <name>] [--url <url>] [--engine <name>] [--model [engine=]<model>]... [--codex-effort minimal|low|medium|high|xhigh] [--glm-key-env NAME | --no-glm] [--force]\n\nRegisters this machine (code from the panel, or prompted), detects which of claude and codex are installed and signed in, asks whether to add a GLM (z.ai, billed per use) API key (--glm-key-env NAME reads it from that environment variable; --no-glm skips the question), and offers to start the runner at login. MERGEJUDGE_URL overrides the default server.",
+  login: "mergejudge-runner login [--name <name>] [--installation <id>] [--url <https://app.mergejudge.si>] [--engine claude-code|codex|glm] [--model [engine=]<model>]... [--codex-effort minimal|low|medium|high|xhigh] [--glm-key-env NAME] [--claude-bin <path>] [--codex-bin <path>] [--concurrency 1] [--force] [--yes]\n\nSigns in with GitHub (device flow): prints a code to enter at the address shown, waits for you to approve the MergeJudge GitHub App, then registers this machine and saves the config. With several installations, pass --installation <id> (or pick one when run in a terminal). MERGEJUDGE_URL overrides the default server.",
+  setup: "mergejudge-runner setup [code] [--yes] [--no-autostart] [--print-unit] [--name <name>] [--url <url>] [--engine <name>] [--model [engine=]<model>]... [--codex-effort minimal|low|medium|high|xhigh] [--glm-key-env NAME | --no-glm] [--force]\n\nRegisters this machine (without a code: sign in with GitHub, like `login`; with a code from the panel: enrollment code), detects which of claude and codex are installed and signed in, asks whether to add a GLM (z.ai, billed per use) API key (--glm-key-env NAME reads it from that environment variable; --no-glm skips the question), and offers to start the runner at login. MERGEJUDGE_URL overrides the default server.",
   run: "mergejudge-runner run [--concurrency 1] [--once] [--claude-bin <path>] [--codex-bin <path>] [--job-timeout-min 10] [--remote-url-template <url with {owner} and {repo}>] [--cache-max-gb 5]",
   status: "mergejudge-runner status",
 };
@@ -77,12 +82,13 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
         "claude-bin": { type: "string" }, "codex-bin": { type: "string" }, "codex-effort": { type: "string" }, model: { type: "string", multiple: true }, "glm-key-env": { type: "string" }, "no-glm": { type: "boolean" }, concurrency: { type: "string" }, force: { type: "boolean" }, once: { type: "boolean" },
         config: { type: "string" }, "job-timeout-min": { type: "string" }, "remote-url-template": { type: "string" }, "cache-max-gb": { type: "string" }, wait: { type: "string" },
         help: { type: "boolean", short: "h" },
-        yes: { type: "boolean" }, "no-autostart": { type: "boolean" }, "print-unit": { type: "boolean" }, "dry-run-autostart": { type: "boolean" },
+        installation: { type: "string" }, yes: { type: "boolean" }, "no-autostart": { type: "boolean" }, "print-unit": { type: "boolean" }, "dry-run-autostart": { type: "boolean" },
       },
     });
     if (v.help && cmd in COMMAND_USAGE) { out(`Usage:\n  ${COMMAND_USAGE[cmd]}\n\nCommon: --config <path>, --help`); return 0; }
     const configPath = v.config ?? defaultConfigPath(env);
     if (cmd === "register") return await register(v, configPath, deps, out);
+    if (cmd === "login") return await login(v, configPath, deps, out);
     if (cmd === "setup") return await setup(v, positionals, configPath, deps, out, err);
     if (cmd === "run") return await run(v, configPath, deps, err);
     if (cmd === "status") return await status(configPath, deps, out);
@@ -103,6 +109,27 @@ function applyCodexEffort(settings: Record<string, EngineSettings>, effort: stri
 }
 
 type Vals = Record<string, string | boolean | string[] | undefined>;
+
+const installationOpt = (v: Vals): number | undefined => (v.installation === undefined ? undefined : intOpt(v.installation as string, 0, 1, Number.MAX_SAFE_INTEGER, "installation"));
+
+async function login(v: Vals, configPath: string, deps: CliDeps, out: (l: string) => void): Promise<number> {
+  const env = deps.env ?? process.env;
+  const engine = (v.engine as string | undefined) ?? "claude-code";
+  const glmApiKey = readGlmKeyEnv(v["glm-key-env"] as string | undefined, env);
+  const settings = buildEngineSettings([engine], pickDefaultEngine(engine, engine === "glm" && !glmApiKey && !env[GLM_KEY_ENV] ? [] : [engine]), (v.model as string[] | undefined) ?? []);
+  applyCodexEffort(settings, v["codex-effort"] as string | undefined);
+  const cfg = await loginRunner({
+    url: (v.url as string | undefined) ?? env.MERGEJUDGE_URL ?? DEFAULT_URL, name: v.name as string | undefined, engine, settings, glmApiKey, concurrency: v.concurrency as string | undefined,
+    claudeBin: v["claude-bin"] as string | undefined, codexBin: v["codex-bin"] as string | undefined, force: v.force === true, configPath, fetch: deps.fetch, env,
+    installation: installationOpt(v),
+  }, deps, out);
+  out(`Registered runner ${cfg.runnerId} (${cfg.name}). Config saved to ${configPath} (mode 600).`);
+  for (const l of engineSummary(cfg, env)) out(l);
+  out(engine === "codex" ? "Next: make sure `codex` is signed in with ChatGPT (`codex login`), then run `mergejudge-runner run`."
+    : engine === "glm" ? "Next: run `mergejudge-runner run`. GLM reviews are billed to your z.ai API key."
+    : "Next: make sure `claude` is logged in with your own subscription, then run `mergejudge-runner run`.");
+  return 0;
+}
 
 async function register(v: Vals, configPath: string, deps: CliDeps, out: (l: string) => void): Promise<number> {
   const code = v.code as string | undefined, urlRaw = v.url as string | undefined;
@@ -145,8 +172,10 @@ function engineSummary(cfg: RunnerConfig, env: Record<string, string | undefined
   return caps.map((c, i) => `${i === 0 ? "engines:   " : "           "} ${c.engine}${i === 0 ? " (default)" : ""} - ${c.billing === "api-key" ? "API key, billed per use" : "subscription"}, model ${c.defaultModel ?? "default"}${c.models.filter((m) => m !== c.defaultModel).length ? ` (also: ${c.models.filter((m) => m !== c.defaultModel).join(", ")})` : ""}`);
 }
 
-/** Enrollment code -> runner token, saved to the config file (0600). Shared by `register` and `setup`. */
-async function registerRunner(i: RegisterInput): Promise<RunnerConfig> {
+interface Prepared { url: string; engine: string; engines: Record<string, EngineSettings>; glmApiKey: string | null; caps: ReturnType<typeof runnerCaps>; concurrency: number; name: string }
+
+/** Validates the inputs shared by every way of registering (code or GitHub sign-in). */
+function prepareRegistration(i: Omit<RegisterInput, "code">): Prepared {
   const url = validateUrl(i.url);
   const engine = i.engine ?? "claude-code";
   if (!["claude-code", "codex", "glm"].includes(engine)) throw new ConfigError(`unsupported engine "${engine}" (use claude-code, codex or glm)`);
@@ -157,17 +186,37 @@ async function registerRunner(i: RegisterInput): Promise<RunnerConfig> {
   if (!caps.length) throw new ConfigError(`engine "${engine}" has no usable settings (glm needs a z.ai key: --glm-key-env NAME or ${GLM_KEY_ENV})`);
   const concurrency = intOpt(i.concurrency, 1, 1, 16, "concurrency");
   if (!i.force && existsSync(i.configPath)) throw new ConfigError(`already registered (${i.configPath}); use --force to replace it`);
-  const api = createApi(url, VERSION, i.fetch);
-  const name = i.name ?? hostname();
+  return { url, engine, engines, glmApiKey, caps, concurrency, name: i.name ?? hostname() };
+}
+
+/** The capability fields /register and /device/poll both take. */
+const capabilityBody = (p: Prepared) => ({
+  // `engines` (names) stays for Workers older than runner 0.2.0; `capabilities` carries billing and models.
+  engines: p.caps.map((c) => c.engine), capabilities: p.caps, modes: [...MODES], features: [...FEATURES], concurrency: p.concurrency, version: VERSION, labels: [platform()],
+});
+
+/** Writes the config (0600, atomic) from a register / device-poll answer. */
+function writeRegistered(i: Omit<RegisterInput, "code">, p: Prepared, r: { runnerId: string; accessToken: string; expiresAt?: unknown; installationId?: unknown }): RunnerConfig {
+  const cfg: RunnerConfig = {
+    v: 1, url: p.url, runnerId: r.runnerId, name: p.name, engine: p.engine, token: r.accessToken,
+    tokenExpiresAt: typeof r.expiresAt === "string" ? r.expiresAt : null,
+    ...(typeof r.installationId === "number" ? { installationId: r.installationId } : {}),
+    engines: p.engines, ...(p.glmApiKey ? { glmApiKey: p.glmApiKey } : {}),
+    claudeBin: i.claudeBin ?? null, ...(i.codexBin ? { codexBin: i.codexBin } : {}), registeredAt: new Date().toISOString(),
+  };
+  saveConfig(i.configPath, cfg);
+  return cfg;
+}
+
+/** Enrollment code -> runner token, saved to the config file (0600). Shared by `register` and `setup <code>`. */
+async function registerRunner(i: RegisterInput): Promise<RunnerConfig> {
+  const p = prepareRegistration(i);
+  const api = createApi(p.url, VERSION, i.fetch);
   let res;
   try {
-    res = await api("POST", "/register", {
-      token: i.code,
-      // `engines` (names) stays for Workers older than runner 0.2.0; `capabilities` carries billing and models.
-      body: { name, engines: caps.map((c) => c.engine), capabilities: caps, modes: [...MODES], features: [...FEATURES], concurrency, version: VERSION, labels: [platform()] },
-    });
+    res = await api("POST", "/register", { token: i.code, body: { name: p.name, ...capabilityBody(p) } });
   } catch (e) {
-    if (e instanceof NetworkError) throw new Error(`could not reach ${url}: ${e.message}`);
+    if (e instanceof NetworkError) throw new Error(`could not reach ${p.url}: ${e.message}`);
     throw e;
   }
   if (res.status === 401) throw new Error("the enrollment code is invalid, expired (15 min) or already used; create a new one in the panel");
@@ -175,20 +224,30 @@ async function registerRunner(i: RegisterInput): Promise<RunnerConfig> {
   if (res.status !== 201 || typeof res.body?.accessToken !== "string" || typeof res.body.runnerId !== "string") {
     throw new Error(`registration failed (HTTP ${res.status}: ${errorCode(res)})`);
   }
-  const cfg: RunnerConfig = {
-    v: 1, url, runnerId: res.body.runnerId, name, engine, token: res.body.accessToken,
-    tokenExpiresAt: typeof res.body.expiresAt === "string" ? res.body.expiresAt : null,
-    ...(typeof res.body.installationId === "number" ? { installationId: res.body.installationId } : {}),
-    engines, ...(glmApiKey ? { glmApiKey } : {}),
-    claudeBin: i.claudeBin ?? null, ...(i.codexBin ? { codexBin: i.codexBin } : {}), registeredAt: new Date().toISOString(),
-  };
-  saveConfig(i.configPath, cfg);
-  return cfg;
+  return writeRegistered(i, p, res.body as { runnerId: string; accessToken: string });
+}
+
+/** Sign in with GitHub (device flow) -> runner token, saved to the config file (0600). Used by `login` and `setup` without a code. */
+async function loginRunner(i: Omit<RegisterInput, "code"> & { installation?: number }, deps: CliDeps, out: (l: string) => void): Promise<RunnerConfig> {
+  const p = prepareRegistration(i);
+  const interactive = canPrompt(deps);
+  const reg = await deviceLogin({
+    api: createApi(p.url, VERSION, i.fetch), out, sleep: deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),
+    ...(interactive ? { choose: async (list) => {
+      for (;;) {
+        const a = (await ask(deps, `Number (1-${list.length}): `)).trim();
+        const n = Number(a);
+        if (Number.isInteger(n) && n >= 1 && n <= list.length) return n - 1;
+        out("Not a valid number.");
+      }
+    } } : {}),
+  }, capabilityBody(p), p.name, i.installation);
+  return writeRegistered(i, p, reg);
 }
 
 async function ask(deps: CliDeps, question: string): Promise<string> {
   if (deps.prompt) return deps.prompt(question);
-  if (!process.stdin.isTTY) throw new ConfigError("no terminal to prompt on; pass the code as an argument (and --yes / --no-autostart)");
+  if (!process.stdin.isTTY) throw new ConfigError("no terminal to prompt on; answer the prompts, or pass --yes / --no-autostart");
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try { return await rl.question(question); } finally { rl.close(); }
 }
@@ -230,8 +289,8 @@ async function setup(v: Vals, positionals: string[], configPath: string, deps: C
   if (printOnly && existsSync(configPath) && !positionals[0]) {
     cfg = loadConfig(configPath);
   } else {
-    const code = (positionals[0] ?? (await ask(deps, "Sign-up code (from the MergeJudge panel): "))).trim();
-    if (!code) throw new ConfigError("a sign-up code is required");
+    const code = positionals[0]?.trim() || undefined;
+    if (positionals[0] !== undefined && !code) throw new ConfigError("the sign-up code is empty");
     for (const c of checks) out(`${c.name}: ${c.installed ? (c.signedIn ? "installed, signed in" : "installed, NOT signed in") : "not found"}`);
     for (const w of cliWarnings(checks)) out(`warning: ${w}`);
 
@@ -252,10 +311,11 @@ async function setup(v: Vals, positionals: string[], configPath: string, deps: C
     const engine = requested && !enabled.includes(requested) && enabled.length === 0 && requested !== "glm" ? requested : pickDefaultEngine(requested, enabled);
     const settings = buildEngineSettings(enabled.includes(engine) ? enabled : [...enabled, engine], engine, (v.model as string[] | undefined) ?? []);
     applyCodexEffort(settings, v["codex-effort"] as string | undefined);
-    cfg = await registerRunner({
-      code, url, name: v.name as string | undefined, engine, settings, glmApiKey, concurrency: v.concurrency as string | undefined,
+    const input = {
+      url, name: v.name as string | undefined, engine, settings, glmApiKey, concurrency: v.concurrency as string | undefined,
       claudeBin: claudeBin ?? undefined, codexBin: codexBin ?? undefined, force: v.force === true, configPath, fetch: deps.fetch, env,
-    });
+    };
+    cfg = code ? await registerRunner({ ...input, code }) : await loginRunner({ ...input, installation: installationOpt(v) }, deps, out);
     out(`Registered runner ${cfg.runnerId} (${cfg.name}) with ${cfg.url}. Config saved to ${configPath} (mode 600${glmApiKey ? "; it holds your z.ai key" : ""}).`);
     for (const l of engineSummary(cfg, env)) out(l);
     if (glmApiKey) out("GLM runs through z.ai with your API key and is billed per use. The key is stored only in the config file and is never printed.");

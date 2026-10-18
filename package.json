@@ -12,6 +12,7 @@
   },
   "files": [
     "dist",
+    "core",
     "examples",
     "README.md",
     "LICENSE"

@@ -12,6 +12,44 @@ The runner is not standalone: it connects to the MergeJudge hosted service, whic
 
 In every mode, your code is sent to **your own AI provider** under your own account (Claude Code, Codex or GLM), not through MergeJudge.
 
+## GitHub Action
+
+This repository also contains a GitHub Action (`action.yml`) that sorts pull requests into `auto`, `review` and `block` lanes using deterministic rules plus an optional AI review. It is separate from the runner above and does not need a MergeJudge account.
+
+**Where it runs.** The whole review runs inside your own GitHub Actions runner. The Action does not call the hosted MergeJudge service. It talks to the GitHub API with the token you give it and, only if you configure an AI provider, sends the pull request diff to that provider (the one you set in `.mergejudge.yml` or the `provider` input) using your own key. With `provider: none`, or no provider configured, the review is rules-only and the diff goes nowhere except GitHub.
+
+```yaml
+# .github/workflows/mergejudge.yml
+name: MergeJudge
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+jobs:
+  lane:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: gauravsharmaGG/mergejudge-runner@v1
+        env:
+          # Bring your own key: store it as a repository secret and name it here.
+          MJ_API_KEY: ${{ secrets.MJ_API_KEY }}
+        with:
+          provider: anthropic          # or openai-compatible, or none for rules-only
+          model: your-model-name
+          api_key_env: MJ_API_KEY
+```
+
+No `actions/checkout` step is needed: the Action reads `.mergejudge.yml` from the pull request's base branch through the API, and reads the diff from the API. Without a config file it uses built-in defaults.
+
+- **Inputs.** `github_token` (defaults to the workflow token), `app_id` / `app_private_key` (optional GitHub App credentials), `mode`, `config_path`, `provider`, `base_url`, `model`, `api_key_env`. Output: `lane`.
+- **Modes.** `triage` reviews a pull request (default on `pull_request`). `feedback` records review feedback from `issue_comment` events, and `propose` opens a learning proposal PR on `schedule` or `workflow_dispatch`; both of these store data on a `mergejudge-learning` branch, so they need `contents: write` and a workflow that triggers them. Plain `pull_request` use needs only the permissions shown above. All three modes are available in this Action.
+- **Fork pull requests.** For `pull_request` events from forks, GitHub gives the workflow a read-only token and no secrets. The review code in this repository does not yet have a fallback for that case: posting the comment is rejected by GitHub, and the step fails instead of falling back to a rules-only comment. The same-repository case is unaffected. If you need to avoid failures on forks, run the Action only for same-repository branches (`if: github.event.pull_request.head.repo.full_name == github.repository` on the job) until the fallback is synced into this repository.
+- **Version.** The `@v1` tag will be published by the repository owner. Until it exists, pin a commit SHA instead.
+- **Build.** The Action runs the committed bundle `action/index.cjs` on Node 24, built from `src/action.ts` and `core/` with `npm run build:action`. A test fails if the committed bundle is out of date.
+
 ## Install
 
 Needs Node >= 20 and, for the default engine, the [Claude Code](https://code.claude.com) CLI (`claude`), logged in.
@@ -131,7 +169,7 @@ npm run verify                  # typecheck + tests + build
 node dist/cli.js --help
 ```
 
-`src/` is the runner; `core/` is the shared review code (rules, prompts, parsing, result format) vendored from the MergeJudge core, so the prompt, JSON parsing and result format are identical to the service. `core/` is synced by maintainers; see [CONTRIBUTING.md](CONTRIBUTING.md).
+`src/` is the runner (plus `src/action.ts`, the GitHub Action entry point); `core/` is the shared review code (rules, prompts, parsing, result format) vendored from the MergeJudge core, so the prompt, JSON parsing and result format are identical to the service. `core/` is synced by maintainers; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Changelog
 

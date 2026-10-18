@@ -143,6 +143,8 @@ node dist/cli.js --help
 
 ## Changelog
 
+- **0.4.8**: `mergejudge-runner login` — sign in with GitHub (device flow) so you can start the runner without the panel enrollment code. Needs Device Flow enabled on the MergeJudge GitHub App.
+
 See the GitHub releases.
 
 - **0.4.7**: first release from this public repository. Package links, description and README updated. The code is identical to 0.4.6.

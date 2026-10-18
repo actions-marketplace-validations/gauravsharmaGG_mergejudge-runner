@@ -1,10 +1,9 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import { aggregate, explainLane, type Aggregate } from "./aggregate.js";
 import { applyApproval } from "./approval.js";
 import type { Config } from "./config.js";
 import type { Lane, PrFile } from "./types.js";
 import {
-  approvePr, createCheckRun, dismissOwnApprovals, enableAutoMerge, fetchPrFiles, fetchRepoFile,
+  approvePr, createCheckRun, dismissOwnApprovals, enableAutoMerge, fetchPrFiles, fetchRepoFile, UNLISTED_FILES_PATH,
   syncInlineFindings, upsertStickyComment, githubContextSource, type Octokit, type Repo,
 } from "./github.js";
 import { applyLearned, type LearnedItem } from "./falsealarm.js";
@@ -16,7 +15,7 @@ import { createProvider, type LlmCallUsage, type WorkersAiBinding } from "./llm/
 import type { LlmProvider } from "./llm/provider.js";
 import { canUseTools } from "./llm/provider.js";
 import { filterPolicyPaths, loadPolicies, type Policies } from "./policy.js";
-import { renderComment } from "./render.js";
+import { CHECK_NAME, EMOJI, renderComment } from "./render.js";
 import { selectCriteria } from "./rubrics.js";
 import { excludeFromLlm } from "./rules.js";
 import { gatherContext, type ContextPiece, type ContextSource } from "./context.js";
@@ -47,6 +46,16 @@ export interface ReviewInput {
   env?: Record<string, string | undefined>;
   /** Why the key was withheld (Worker key policy); shown instead of the generic "env X not set" note. */
   keyNote?: string;
+  /** Note shown when no AI provider is configured (the caller supplies the wording). */
+  noProviderNote?: string;
+  /** Neutral caller notes included in the review summary. */
+  reviewNotes?: string[];
+  /** Hosted callers only: AI is skipped for this review (kill switch or PR too large). Rules-only; this neutral line is the one note shown. */
+  skipAi?: string;
+  /** Hosted callers only: called with the listed files for a hosted-AI review; a returned note skips the model like `skipAi`. */
+  skipAiGate?: (files: PrFile[]) => string | null;
+  /** Hosted callers only: stop listing after this many files (the rest is represented by one unlisted-files entry, so the lane can only rise). Unset = list everything (Action, CLI). */
+  maxListFiles?: number;
   /** Called once with what was decided and spent (the Worker records usage). */
   onResult?: (r: ReviewOutcome) => void | Promise<void>;
   /** Called once with the final lane, the aggregate behind it and the reviewer id (the Worker records outcomes against it). Never changes a lane. */
@@ -67,6 +76,11 @@ export interface ReviewInput {
    * tools, deep falls back to context mode and says so.
    */
   deep?: DeepEnv;
+  /**
+   * Deep mode from a local checkout (the Action): called once with the files sent to the model, returns the context to read
+   * next to the diff (single pass, no tool calls). Throw to fall back to context mode; the message becomes the note.
+   */
+  retrieveDeep?: (kept: PrFile[]) => Promise<{ pieces: ContextPiece[]; notes: string[] }>;
   log: { info: (m: string) => void; warning: (m: string) => void };
   /**
    * Optional cache of the LLM result for this PR head (the Worker uses KV). On a hit the LLM is not
@@ -139,11 +153,18 @@ export interface ProduceInput {
   providerNote?: string;
   /** Why the key was withheld (Worker key policy); shown instead of the generic note. */
   keyNote?: string;
+  /** Note shown when no AI provider is configured (the caller supplies the wording). */
+  noProviderNote?: string;
+  /** Neutral caller notes included in the review summary. */
+  reviewNotes?: string[];
+  /** Hosted callers only: AI was skipped (`provider` is null); rendered as the single note instead of "LLM disabled (...)". */
+  skipAi?: string;
   /** Read-only repo file access at cfgRef (policy files). */
   readRepoFile: (path: string, ref: string) => Promise<string | null>;
   /** Read-only context-mode file access at the head SHA. */
   contextSource: ContextSource;
   deep?: DeepEnv;
+  retrieveDeep?: ReviewInput["retrieveDeep"];
   /**
    * Deep mode for a provider without tools (runners): context the Worker already retrieved from its index. `ok` = it came
    * from the index (reported as deep, single pass); otherwise it is plain context-mode pieces and `notes` says why.
@@ -164,7 +185,7 @@ export interface ProduceInput {
 export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult> {
   const { pr, cfg, cfgRef, files, provider, log } = o;
   const number: number = pr.number;
-  const notes: string[] = [];
+  const notes: string[] = [...(o.reviewNotes ?? [])];
 
   if (isLearningBranchHead(pr.head?.ref, cfg.learning.branch)) {
     const proposal = isProposalBranchHead(pr.head?.ref);
@@ -191,7 +212,9 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
 
   const labels: string[] = (pr.labels ?? []).map((l: { name: string }) => l.name);
 
-  if (o.providerNote && cfg.provider.type !== "none") notes.push(`LLM disabled (${(!provider && o.keyNote) || o.providerNote}); rules-only.`);
+  if (o.skipAi) notes.push(o.skipAi);
+  else if (o.providerNote && cfg.provider.type !== "none") notes.push(`LLM disabled (${(!provider && o.keyNote) || o.providerNote}); rules-only.`);
+  if (o.noProviderNote && !o.skipAi && cfg.provider.type === "none" && !provider) notes.push(o.noProviderNote);
   let llm = null;
   let policies: Policies = { text: "", used: [], skipped: [] };
   let tokens = 0;
@@ -221,11 +244,23 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
     let mode: "diff" | "context" | "deep" = cfg.review.mode;
     let tools: ReturnType<typeof deepTools> | undefined;
     let retrievedDeep = false;
-    if (mode === "deep" && o.retrieved) {
+    let retrieved = mode === "deep" ? o.retrieved : undefined;
+    if (mode === "deep" && !retrieved && o.retrieveDeep) {
+      try {
+        const r = await o.retrieveDeep(kept);
+        retrieved = { pieces: r.pieces, ok: true, notes: r.notes };
+      } catch (e) {
+        const why = (e as Error).message;
+        notes.push(`Deep mode unavailable (${why}); used context mode.`);
+        log.warning(`deep mode: ${why}; falling back to context`);
+        mode = "context";
+      }
+    }
+    if (mode === "deep" && retrieved) {
       mode = "context";
-      context = o.retrieved.pieces;
-      retrievedDeep = o.retrieved.ok;
-      notes.push(...o.retrieved.notes);
+      context = retrieved.pieces;
+      retrievedDeep = retrieved.ok;
+      notes.push(...retrieved.notes);
     } else if (mode === "deep") {
       const fallback = (why: string) => {
         mode = "context";
@@ -309,11 +344,28 @@ export interface PostContext {
   onSnapshot?: ReviewInput["onSnapshot"];
 }
 
+/** Added to the sticky comment when the `mergejudge/lane` check run could not be created. */
+export function checkFallbackNote(lane: Lane, status?: number): string {
+  return `> ℹ️ The \`${CHECK_NAME}\` check run could not be created${status ? ` (HTTP ${status})` : ""}, usually because the token is read-only (for example on a fork PR) or lacks \`checks: write\`. Lane: ${EMOJI[lane]} \`${lane}\`. A branch rule that requires this check will not see it.`;
+}
+
 /** Perform every GitHub write for a ReviewResult: sticky comment, check run, inline findings, approval. */
 export async function postReviewResult(r: ReviewResult, c: PostContext): Promise<Lane> {
   const { ok, repo, cfg, log } = c;
   await upsertStickyComment(ok, repo, r.prNumber, r.body);
-  await createCheckRun(ok, repo, r.headSha, r.agg);
+  try {
+    await createCheckRun(ok, repo, r.headSha, r.agg);
+  } catch (e) {
+    // A refusal (403 read-only token on fork PRs or no `checks: write`, 404/422 unknown commit) is permanent and must not
+    // fail the whole review: the lane goes into the sticky comment instead. Anything else (5xx, network) still throws, so
+    // the Worker's runner flow keeps retrying a post that did not complete.
+    const status = (e as { status?: number }).status;
+    if (status !== 403 && status !== 404 && status !== 422) throw e;
+    log.warning(`Could not create the ${CHECK_NAME} check run (${status ?? "error"}: ${(e as Error).message}); the lane is in the PR comment instead.`);
+    try {
+      await upsertStickyComment(ok, repo, r.prNumber, `${r.body}\n\n${checkFallbackNote(r.lane, status)}`);
+    } catch (e2) { log.warning(`Could not update the PR comment either: ${(e2 as Error).message}`); }
+  }
   if (r.kind === "learning-block") {
     log.info("Blocked: head ref is learning branch " + cfg.learning.branch + ".");
     return "block";
@@ -356,14 +408,17 @@ export async function runReview(o: ReviewInput): Promise<"auto" | "review" | "bl
   const { ok, repo, pr, cfg, cfgRef } = o;
   const env = o.env ?? process.env;
   const learning = isLearningBranchHead(pr.head?.ref, cfg.learning.branch);
-  const files = learning ? [] : await fetchPrFiles(ok, repo, pr.number);
-  const { provider, note } = learning ? { provider: null, note: undefined } : createProvider(cfg.provider, env, { ...o.bindings, onCall: o.onLlmCall });
+  const files = learning ? [] : await fetchPrFiles(ok, repo, pr.number, o.maxListFiles);
+  const unlisted = files.some((f) => f.path === UNLISTED_FILES_PATH);
+  const skipAi = learning ? undefined : o.skipAi ?? o.skipAiGate?.(files) ?? undefined;
+  const reviewNotes = unlisted && !skipAi ? [...(o.reviewNotes ?? []), `This PR has more than ${o.maxListFiles} files; only the first ${o.maxListFiles} were checked and the lane is at least review.`] : o.reviewNotes;
+  const { provider, note } = learning || skipAi ? { provider: null, note: undefined } : createProvider(cfg.provider, env, { ...o.bindings, onCall: o.onLlmCall });
   const result = await produceReviewResult({
     ref: `${repo.owner}/${repo.repo}#${pr.number}`,
-    pr, cfg, cfgRef, files, provider, providerNote: note, keyNote: o.keyNote,
+    pr, cfg, cfgRef, files, provider, providerNote: note, keyNote: o.keyNote, noProviderNote: o.noProviderNote, reviewNotes, skipAi,
     readRepoFile: (p, ref) => fetchRepoFile(ok, repo, p, ref),
     contextSource: o.contextSource ?? githubContextSource(ok, repo, pr.head.sha),
-    deep: o.deep, learned: o.learned, lessons: o.lessons, outcomeStats: o.outcomeStats, log: o.log, llmCache: o.llmCache,
+    deep: o.deep, retrieveDeep: o.retrieveDeep, learned: o.learned, lessons: o.lessons, outcomeStats: o.outcomeStats, log: o.log, llmCache: o.llmCache,
   });
   return postReviewResult(result, {
     ok, repo, cfg, appToken: o.appToken, botLogin: o.botLogin, log: o.log, onResult: o.onResult, onSnapshot: o.onSnapshot,

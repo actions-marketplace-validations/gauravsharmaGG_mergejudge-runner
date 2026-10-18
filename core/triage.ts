@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import { z } from "zod";
 import type { Config } from "./config.js";
 import { COMPACT_JSON_INSTRUCTION, resolveOutputLimit, retryOutputLimit } from "./budget.js";

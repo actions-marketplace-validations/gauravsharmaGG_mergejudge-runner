@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import type { Config } from "./config.js";
 import { trustedAuthor, type PrAuthor } from "./trusted.js";
 import type { FileVerdict, Lane } from "./types.js";

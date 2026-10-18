@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 /**
  * Runner engines and models: what a runner declares, what a repo asks for, and whether they match.
  * Pure (zod only), so the Worker and the runner package share one implementation.

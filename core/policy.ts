@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import { minimatch } from "minimatch";
 export const DEFAULT_POLICY_FILES = ["REVIEW_POLICY.md", "APPROVAL_POLICY.md", "AGENTS.md", "CLAUDE.md"];
 export const POLICY_MAX_EACH = 8 * 1024;

@@ -1,0 +1,42 @@
+name: MergeJudge
+description: Sort pull requests into auto / review / block lanes with rules and an optional bring-your-own LLM.
+author: MergeJudge contributors
+branding:
+  icon: git-pull-request
+  color: blue
+runs:
+  using: node24
+  main: action/index.cjs
+inputs:
+  github_token:
+    description: Token with pull-requests:write and checks:write; contents:write is needed to store lessons and open learning PRs.
+    default: ${{ github.token }}
+  app_id:
+    description: Optional GitHub App ID. With app_private_key, an installation token is minted and used for all API calls.
+    required: false
+  app_private_key:
+    description: Optional GitHub App private key (PEM). Pass it from a secret.
+    required: false
+  mode:
+    description: "auto (default) | triage | feedback | propose. auto picks from the GitHub event."
+    default: auto
+  config_path:
+    description: Path to the config file in the repository (read from the PR base).
+    default: .mergejudge.yml
+  provider:
+    description: Override provider.type (openai-compatible | anthropic | none).
+    required: false
+  base_url:
+    description: Override provider.base_url.
+    required: false
+  model:
+    description: Override provider.model.
+    required: false
+  api_key_env:
+    description: Override provider.api_key_env (name of the env var holding the key).
+    required: false
+outputs:
+  lane:
+    description: Overall lane (auto, review or block).
+  proposal_pr:
+    description: Number of the learning proposal PR, when mode propose opened one.

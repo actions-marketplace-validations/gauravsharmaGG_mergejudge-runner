@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import { isTruncated, openAiUsage, tokenCount, parseToolArgs, postJson, reportUsage, type UsageSink, type ChatMessage, type ChatRequest, type ChatTurn, type LlmProvider, type LlmRequest, type LlmResult } from "./provider.js";
 
 /** Responses API input items for a tool conversation (stateless: the full history is re-sent). */

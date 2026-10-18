@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 export interface LlmRequest {
   system: string;
   user: string;

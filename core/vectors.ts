@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import { allChunks, chunkById, embeddingText, type IndexSnapshot } from "./deepindex.js";
 
 /** Embeddings + vector search for `semantic_search`. Interfaces here; Cloudflare bindings are thin adapters. */

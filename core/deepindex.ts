@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import { localImports, resolveImport } from "./context.js";
 
 /**

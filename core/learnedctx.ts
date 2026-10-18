@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import { defang, falseAlarmLines, TEAM_PREFS_TAG, type LearnedItem } from "./falsealarm.js";
 import { LESSONS_PATH, parseLessons, type Lesson } from "./learning.js";
 import { fetchRepoFile, type Octokit, type Repo } from "./github.js";

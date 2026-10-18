@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import type { Lane } from "./types.js";
 import type { FeedbackKind, ParsedFeedback } from "./feedback.js";
 import { LEGACY_PROPOSAL_BRANCH, PROPOSAL_BRANCH_PREFIX } from "./writes.js";

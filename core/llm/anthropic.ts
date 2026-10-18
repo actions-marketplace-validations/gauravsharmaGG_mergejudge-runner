@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import { isTruncated, postJson, reportUsage, tokenCount, type UsageSink, type LlmUsage, type ChatMessage, type ChatRequest, type ChatTurn, type LlmProvider, type LlmRequest, type LlmResult } from "./provider.js";
 
 type Block = Record<string, unknown>;

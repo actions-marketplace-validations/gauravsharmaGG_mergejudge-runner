@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 export type Lane = "auto" | "review" | "block";
 export const LANE_ORDER: Record<Lane, number> = { auto: 0, review: 1, block: 2 };
 

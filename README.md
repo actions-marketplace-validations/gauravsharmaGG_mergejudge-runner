@@ -12,6 +12,73 @@ The runner is not standalone: it connects to the MergeJudge service and needs th
 
 In every mode, your code is sent to **your own AI provider** under your own account (Claude Code, Codex or GLM), not through MergeJudge.
 
+## GitHub Action
+
+This repository also contains a GitHub Action (`action.yml`) that sorts pull requests into `auto`, `review` and `block` lanes using deterministic rules plus an optional AI review. It is separate from the runner above and does not need a MergeJudge account.
+
+**Where it runs.** The whole review runs inside your own GitHub Actions runner. The Action does not call the hosted MergeJudge service. It talks to the GitHub API with the token you give it and, only if you configure an AI provider, sends the pull request diff to that provider (the one you set in `.mergejudge.yml` or the `provider` input) using your own key. With `provider: none`, or no provider configured, the review is rules-only and the diff goes nowhere except GitHub.
+
+```yaml
+# .github/workflows/mergejudge.yml
+name: MergeJudge
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created, edited]
+  schedule:
+    # Weekly proposal: Mondays 09:00 UTC (adjust as you like).
+    - cron: "0 9 * * 1"
+  workflow_dispatch: {}
+permissions:
+  contents: write          # store lessons + open the proposal PR
+  pull-requests: write
+  checks: write
+jobs:
+  lane:
+    # Skip noisy issue_comment events that are not MergeJudge feedback (saves minutes).
+    if: >
+      github.event_name != 'issue_comment' ||
+      contains(github.event.comment.body, 'MergeJudge') ||
+      startsWith(github.event.comment.body, '/mergejudge')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: gauravsharmaGG/mergejudge-runner@v1
+        env:
+          # Bring your own key: store it as a repository secret and name it here.
+          # Omit (or set provider: none) for rules-only reviews.
+          MJ_API_KEY: ${{ secrets.MJ_API_KEY }}
+        with:
+          provider: anthropic          # or openai-compatible, or none for rules-only
+          model: your-model-name
+          api_key_env: MJ_API_KEY
+```
+
+No `actions/checkout` step is needed for the default modes (add one for deep mode, below): the Action reads `.mergejudge.yml` from the pull request's base branch through the API, and reads the diff from the API. Without a config file it uses built-in defaults.
+
+**How learning works in the Action**
+
+1. **Signals (feedback).** On `issue_comment` (created/edited), mode `feedback` records a lesson when a write-access human ticks the feedback checkboxes on the MergeJudge sticky comment, or posts `/mergejudge learn …`. Lessons are appended to `lessons/lessons.jsonl` on the `mergejudge-learning` branch (created from the default branch on first write). Merge or revert alone does **not** create Action lessons — those outcomes are a hosted-Worker path. The Action only learns from explicit feedback on the PR.
+2. **Weekly proposal.** On `schedule` or `workflow_dispatch`, mode `propose` reads those lessons and, when there are enough (`learning.propose_after`, default 10), opens or updates a PR (`mergejudge/proposal-learning` → default branch) that may suggest guarded edits to `.mergejudge.yml` (more protected paths / prompt notes only) plus a report file. Labels: `do-not-merge`, `needs-human`.
+3. **Permissions.** Learning needs `contents: write` and `pull-requests: write`. GitHub's default `GITHUB_TOKEN` cannot open PRs unless the repository setting **Allow GitHub Actions to create and approve pull requests** is on (Settings → Actions → General → Workflow permissions).
+
+- **Inputs.** `github_token` (defaults to the workflow token), `app_id` / `app_private_key` (optional GitHub App credentials), `mode` (`auto` | `triage` | `feedback` | `propose`), `config_path`, `provider`, `base_url`, `model`, `api_key_env`. Outputs: `lane`, `proposal_pr`.
+- **Modes.** `auto` (default) picks from the event: `pull_request` → triage, `issue_comment` → feedback, `schedule` / `workflow_dispatch` → propose. All three modes are available in this Action.
+- **Deep mode (`review.mode: deep`).** Add an `actions/checkout` step before MergeJudge. The Action then indexes the checked-out files in memory (for this run only), finds what the changed code touches (importers, imports, callers, files that mention changed names, strings and env var names, two hops out) and sends those snippets to your AI provider next to the diff, in a single pass (no tool calls). Nothing goes to any MergeJudge server: with the Action everything runs on your GitHub runner and the code goes to the provider you chose with your own key. Without a usable checkout (no `actions/checkout` step, an empty workspace) it falls back to context mode (files read through the GitHub API) and the review says so. With `provider: none` there is no AI step at all. Limits: tracked files only; `.env`, key files, lockfiles, `node_modules`, binaries and files over 1 MB are never read; symlinks are never followed; at most 5,000 files / 50 MB / 2 minutes are indexed (a partial index is reported). The config and policy files are still read from the PR base, not from the checkout.
+
+  ```yaml
+  steps:
+    - uses: actions/checkout@v4    # for pull_request this is the merge of head and base
+    - uses: gauravsharmaGG/mergejudge-runner@v1
+      env: { MJ_API_KEY: "${{ secrets.MJ_API_KEY }}" }
+      with: { provider: anthropic, model: your-model-name, api_key_env: MJ_API_KEY }
+  ```
+
+  Permissions: `contents: read` is enough for the checkout (the learning modes need `contents: write`, see above). Use the `pull_request` event. Do **not** use `pull_request_target` with a checkout of the PR head, since that runs untrusted code with secrets. Fork pull requests get a read-only token and no secrets, so there is no key for the AI and the review falls back to rules-only (see below). Set `review.mode: deep` in `.mergejudge.yml` on the base branch.
+- **Fork pull requests.** For `pull_request` events from forks, GitHub gives the workflow a read-only token and no secrets. If the `mergejudge/lane` check run cannot be created (no `checks: write`), the lane is added to the PR comment instead. Posting the comment itself still needs `pull-requests: write`, which a fork token lacks, so that step fails. To avoid failures on forks, run the Action only for same-repository branches (`if: github.event.pull_request.head.repo.full_name == github.repository` on the job).
+- **Version.** The `@v1` tag will be published by the repository owner. Until it exists, pin a commit SHA instead.
+- **Build.** The Action runs the committed bundle `action/index.cjs` on Node 24, built from `src/action.ts` and `core/` with `npm run build:action`. A test fails if the committed bundle is out of date.
+
 ## Install
 
 Needs Node >= 20 and, for the default engine, the [Claude Code](https://code.claude.com) CLI (`claude`), logged in.
@@ -139,7 +206,7 @@ npm run verify                  # typecheck + tests + build
 node dist/cli.js --help
 ```
 
-`src/` is the runner; `core/` is the shared review code (rules, prompts, parsing, result format) vendored from the MergeJudge core, so the prompt, JSON parsing and result format are identical to the service. `core/` is synced by maintainers; see [CONTRIBUTING.md](CONTRIBUTING.md).
+`src/` is the runner (plus `src/action.ts`, the GitHub Action entry point); `core/` is the shared review code (rules, prompts, parsing, result format) vendored from the MergeJudge core, so the prompt, JSON parsing and result format are identical to the service. `core/` is synced by maintainers; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Changelog
 

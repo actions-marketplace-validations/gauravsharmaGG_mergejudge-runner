@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import { decodeSnapshot, encodeSnapshot, latestKey, snapshotKey, type IndexSnapshot } from "./deepindex.js";
 
 /** The slice of a Cloudflare R2 bucket binding (`env.INDEX_BUCKET`) used here. */

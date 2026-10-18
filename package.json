@@ -12,6 +12,7 @@
   },
   "files": [
     "dist",
+    "core",
     "examples",
     "README.md",
     "LICENSE"
@@ -20,8 +21,9 @@
     "build": "esbuild src/cli.ts --bundle --platform=node --target=node20 --format=esm --banner:js=\"#!/usr/bin/env node\nimport{createRequire as __cr}from'node:module';const require=__cr(import.meta.url);\" --outfile=dist/cli.js && chmod +x dist/cli.js",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "verify": "npm run typecheck && npm test && npm run build",
-    "prepublishOnly": "npm run build"
+    "verify": "npm run typecheck && npm test && npm run build && npm run build:action",
+    "prepublishOnly": "npm run build",
+    "build:action": "esbuild src/action.ts --bundle --platform=node --target=node24 --format=cjs --legal-comments=eof --log-level=warning --outfile=action/index.cjs"
   },
   "homepage": "https://github.com/gauravsharmaGG/mergejudge-runner#readme",
   "repository": {
@@ -46,6 +48,7 @@
     "access": "public"
   },
   "devDependencies": {
+    "@actions/core": "^3.0.1",
     "@actions/github": "^9.1.1",
     "@types/node": "^22.20.5",
     "esbuild": "^0.28.2",

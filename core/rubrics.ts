@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import { parse } from "yaml";
 import { z } from "zod";
 import type { Lane, PrFile } from "./types.js";

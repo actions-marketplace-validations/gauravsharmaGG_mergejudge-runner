@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import type { ProviderConfig } from "../config.js";
 import { AnthropicProvider } from "./anthropic.js";
 import { OpenAiProvider } from "./openai.js";

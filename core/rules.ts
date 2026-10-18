@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import { minimatch } from "minimatch";
 import type { Config } from "./config.js";
 import { maxLane, type FileVerdict, type Lane, type PrFile } from "./types.js";
@@ -236,6 +235,22 @@ export function findRemovedGuards(patch: string | undefined, path = ""): string[
   ).map((g) => g.name);
 }
 
+/**
+ * Application-level authorization checks (role / permission / login guards). Deliberately broad and review-only: a
+ * code file that loses one of these (a removed line matching, with no added line matching anywhere in the file, so moves
+ * and reformatting do not trigger) cannot be auto, with or without an AI. Unlike SAFETY_GUARDS this is a heuristic, so
+ * it raises to review, never block.
+ */
+const AUTH_CHECK = /\b(?:requireRole|requireAuth\w*|requireAdmin|requirePermission|isAdmin|isSuperuser|isOwner|hasRole|hasPermission|checkPermission|checkAuth\w*|assertAuth\w*|ensureAuth\w*|authorize|authorise|verifyToken|can[A-Z]\w*)\s*\(|\b(?:role|userRole|user\.role|isAdmin)\s*[!=]==?\s*[\w"'`]|\bpermissions?\.(?:includes|has|some)\(|@(?:RolesAllowed|PreAuthorize|Secured|login_required|permission_required)\b|\bAuthGuard\b|\bRolesGuard\b/;
+
+/** True when the patch removes an authorization check and no added line contains one (see AUTH_CHECK). */
+export function removesAuthCheck(patch: string | undefined): boolean {
+  if (!patch) return false;
+  const lines = parsePatchLines(patch);
+  if (lines.some((l) => l.op === "add" && AUTH_CHECK.test(l.text))) return false;
+  return lines.some((l) => l.op === "del" && AUTH_CHECK.test(l.text));
+}
+
 /** Never code_auto candidates, whatever the config says: CI/workflow files, env files, shell/SQL/wasm. */
 const CODE_AUTO_NEVER_GLOBS = [".github/**", "**/.env*", "_headers", "**/_headers"];
 /** Hosting header files (CSP, CORS, caching) are always at least review, even if a repo config drops them from lanes.protected. */
@@ -283,6 +298,7 @@ function classifyFileInner(file: PrFile, cfg: Config): FileVerdict {
   const ca = cfg.lanes.code_auto;
   const codeCandidate = !!ca?.enabled && paths.some(isCodeFile);
   if (!codeCandidate && paths.some(isCodeFile)) raise("review", "code file (always needs human review)");
+  if (paths.some(isCodeFile) && removesAuthCheck(file.patch)) raise("review", "removes an authorization or role check (needs human review)");
   if (isDependencyFile(file.path)) raise("review", "dependency manifest or lockfile change");
 
   const changed = file.additions + file.deletions;

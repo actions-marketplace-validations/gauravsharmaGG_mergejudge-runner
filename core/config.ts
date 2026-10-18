@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import { parse } from "yaml";
 import { z } from "zod";
 import { DEFAULT_POLICY_FILES, POLICY_MAX_EACH, POLICY_MAX_TOTAL } from "./policy.js";
@@ -99,7 +98,7 @@ export const configSchema = z.object({
       auto: z.array(z.string()).default(DEFAULT_AUTO),
       protected: z.array(z.string()).default(DEFAULT_PROTECTED),
       max_auto_lines: z.number().int().positive().default(200),
-      /** Opt-in lane for small code changes. Off by default: code files always need review. */
+      /** Opt-in lane for small code changes. Off by default: code files always need review. See docs/DESIGN.md. */
       code_auto: codeAutoSchema,
       /**
        * Opt-in gate for every auto path: only listed GitHub logins. Off by default = no author check.

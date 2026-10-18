@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import { isMap, isScalar, isSeq, parseDocument, type YAMLMap } from "yaml";
 import { minimatch } from "minimatch";
 import { DEFAULT_PROTECTED, parseConfig, type Config } from "./config.js";

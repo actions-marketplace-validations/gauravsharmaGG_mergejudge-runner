@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import { hasAgentTrailer, isAgentPr } from "./agent.js";
 import type { Config } from "./config.js";
 import type { Lane } from "./types.js";

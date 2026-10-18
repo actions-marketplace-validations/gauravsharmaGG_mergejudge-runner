@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 /** Git/contents write guard: MergeJudge may only write to the learning branch or proposal branches. */
 
 export const PROPOSAL_BRANCH_PREFIX = "mergejudge/proposal-";

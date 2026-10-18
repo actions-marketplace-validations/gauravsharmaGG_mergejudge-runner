@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import type * as github from "@actions/github";
 import type { PrFile } from "./types.js";
 import { CHECK_CONCLUSION, CHECK_NAME, MARKER, checkSummary } from "./render.js";
@@ -11,9 +10,28 @@ import { createGuardedWriter, LEGACY_PROPOSAL_BRANCH, PROPOSAL_BRANCH_PREFIX, ty
 export type Octokit = ReturnType<typeof github.getOctokit>;
 export interface Repo { owner: string; repo: string }
 
-export async function fetchPrFiles(ok: Octokit, r: Repo, pull: number): Promise<PrFile[]> {
-  const files = await ok.paginate(ok.rest.pulls.listFiles, { ...r, pull_number: pull, per_page: 100 });
-  return files.map((f) => ({
+/** Stands in for the files a bounded listing did not fetch. It has no patch, so the rules raise the lane to at least `review`. */
+export const UNLISTED_FILES_PATH = "(more files not listed)";
+
+/**
+ * List the PR's files. With `maxFiles` (the Worker's platform bound) listing stops once more than that many files exist:
+ * the first `maxFiles` come back plus one `UNLISTED_FILES_PATH` entry, so the list is longer than the bound and an incomplete
+ * listing can only make the lane stricter. Without it, every file is listed (the Action and CLI).
+ */
+export async function fetchPrFiles(ok: Octokit, r: Repo, pull: number, maxFiles?: number): Promise<PrFile[]> {
+  const opts = { ...r, pull_number: pull, per_page: 100 };
+  let files;
+  let more = false;
+  if (maxFiles === undefined) files = await ok.paginate(ok.rest.pulls.listFiles, opts);
+  else {
+    files = [];
+    for await (const page of ok.paginate.iterator(ok.rest.pulls.listFiles, opts)) {
+      files.push(...page.data);
+      if (files.length > maxFiles) { more = true; break; }
+    }
+    if (files.length > maxFiles) files.length = maxFiles;
+  }
+  const listed = files.map((f) => ({
     path: f.filename,
     status: f.status,
     additions: f.additions,
@@ -21,6 +39,8 @@ export async function fetchPrFiles(ok: Octokit, r: Repo, pull: number): Promise<
     patch: f.patch,
     previousPath: f.previous_filename,
   }));
+  if (more) listed.push({ path: UNLISTED_FILES_PATH, status: "modified", additions: 0, deletions: 0, patch: undefined, previousPath: undefined });
+  return listed;
 }
 
 export async function upsertStickyComment(ok: Octokit, r: Repo, pull: number, body: string): Promise<void> {

@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import type { Config } from "./config.js";
 import { chunkById, findReferences, isSensitivePath, searchSymbols, type IndexSnapshot } from "./deepindex.js";
 import { COMPACT_JSON_INSTRUCTION, resolveOutputLimit, retryOutputLimit } from "./budget.js";

@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import type { Config } from "./config.js";
 import { isAgentPr } from "./agent.js";
 import { codeAutoDecision } from "./codeauto.js";

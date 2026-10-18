@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import { createSign } from "node:crypto";
 
 const b64url = (b: Buffer | string) => Buffer.from(b).toString("base64url");

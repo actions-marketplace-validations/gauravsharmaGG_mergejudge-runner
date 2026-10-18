@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import { hitText, type SemanticHit } from "./deep.js";
 import {
   allChunks, buildIndex, INLINE_LIMITS, updateIndex, type FileChange, type IndexSnapshot, type IndexSource,

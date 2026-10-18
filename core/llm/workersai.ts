@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import { isTruncated, openAiUsage, reportUsage, tokenCount, type LlmProvider, type LlmRequest, type LlmResult, type UsageSink } from "./provider.js";
 
 /** The slice of the Cloudflare Workers AI binding (`env.AI`) MergeJudge uses. */

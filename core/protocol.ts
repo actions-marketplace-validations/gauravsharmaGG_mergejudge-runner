@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 // Runner protocol (/runner/v1) job payload types: the shape of the jobs a runner leases from the Worker.
 import type { Config } from "./config.js";
 import type { ContextPiece } from "./context.js";

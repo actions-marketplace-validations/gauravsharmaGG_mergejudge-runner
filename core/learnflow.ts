@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import type { Config } from "./config.js";
 import { FEEDBACK_MARKER, LEARN_CMD, feedbackChanged, hasFeedback, parseFeedback } from "./feedback.js";
 import {

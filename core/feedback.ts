@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import type { RubricResult } from "./rubrics.js";
 import { escapeMd } from "./render.js";
 

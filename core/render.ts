@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import { explainLane, type Aggregate } from "./aggregate.js";
 import { renderFeedback } from "./feedback.js";
 import type { Lane } from "./types.js";
@@ -14,6 +13,25 @@ export function escapeMd(s: string): string {
     .replace(/&/g, "&amp;")
     .replace(/@/g, "@\u200b")
     .trim();
+}
+
+/** GitHub rejects comment bodies over 65,536 chars (check summaries: 65,535). Stay well under. */
+export const MAX_COMMENT_CHARS = 60_000;
+/** Rows listed per section before "N more" (a 500-file PR otherwise gives a 100 KB comment). */
+export const MAX_LIST_ROWS = 100;
+const moreNote = (shown: number, total: number) => (total > shown ? [`_…and ${total - shown} more not shown (${total} in total)._`] : []);
+
+/**
+ * Last-resort size guard: cut `head` at a line end so that head + `tail` fit in `max`, close any `<details>` the cut
+ * left open and say so. `tail` (feedback block, footer) is always kept, so the sticky-comment markers survive.
+ */
+export function capBody(head: string, tail: string, max = MAX_COMMENT_CHARS): string {
+  if (head.length + tail.length <= max) return head + tail;
+  const note = "\n\n> ⚠️ This comment was shortened to fit GitHub's size limit.\n";
+  let cut = head.slice(0, Math.max(0, max - tail.length - note.length - 64));
+  cut = cut.slice(0, Math.max(cut.lastIndexOf("\n"), 0));
+  const open = (cut.match(/<details/g) ?? []).length - (cut.match(/<\/details>/g) ?? []).length;
+  return cut + "\n" + "</details>\n".repeat(Math.max(open, 0)) + note + tail;
 }
 
 export interface RenderInput {
@@ -32,7 +50,8 @@ export function renderLaneExplanation(agg: Aggregate): string {
   return [
     `Why this lane? ${escapeMd(explanation.summary)}`,
     "", "<details><summary>Why this lane? Details</summary>", "",
-    ...explanation.reasons.map((r) => `- ${r.path ? escapeMd(r.path) + ": " : ""}${escapeMd(r.messages.join("; "))}${r.source ? ` (source: ${escapeMd(r.source)})` : ""}`),
+    ...explanation.reasons.slice(0, MAX_LIST_ROWS).map((r) => `- ${r.path ? escapeMd(r.path) + ": " : ""}${escapeMd(r.messages.join("; "))}${r.source ? ` (source: ${escapeMd(r.source)})` : ""}`),
+    ...moreNote(MAX_LIST_ROWS, explanation.reasons.length),
     "", "</details>",
   ].join("\n");
 }
@@ -48,14 +67,14 @@ export function renderComment(r: RenderInput): string {
 
   if (flagged.length) {
     out.push("### Files needing human review", "", "| File | Lane | Source | Reason |", "|---|---|---|---|");
-    for (const f of flagged)
+    for (const f of flagged.slice(0, MAX_LIST_ROWS))
       out.push(`| ${escapeMd(f.path)} | ${EMOJI[f.lane]} ${f.lane} | ${f.source ?? "rule"} | ${escapeMd(f.reasons.join("; ")) || "-"} |`);
-    out.push("");
+    out.push(...moreNote(MAX_LIST_ROWS, flagged.length), "");
   }
   if (safe.length) {
     out.push(`<details><summary>Safe files (${safe.length})</summary>`, "");
-    for (const f of safe) out.push(`- ${escapeMd(f.path)}${f.codeAuto ? " (code, auto via code_auto opt-in)" : ""}`);
-    out.push("", "</details>", "");
+    for (const f of safe.slice(0, MAX_LIST_ROWS)) out.push(`- ${escapeMd(f.path)}${f.codeAuto ? " (code, auto via code_auto opt-in)" : ""}`);
+    out.push(...moreNote(MAX_LIST_ROWS, safe.length), "", "</details>", "");
   }
   if (safe.length && flagged.length) {
     out.push(
@@ -63,7 +82,8 @@ export function renderComment(r: RenderInput): string {
       "",
       "This PR mixes auto-mergeable and review/block changes. These files could go in a separate auto-mergeable PR:",
       "",
-      ...safe.map((f) => `- ${escapeMd(f.path)}`),
+      ...safe.slice(0, MAX_LIST_ROWS).map((f) => `- ${escapeMd(f.path)}`),
+      ...moreNote(MAX_LIST_ROWS, safe.length),
       "",
     );
   }
@@ -80,18 +100,19 @@ export function renderComment(r: RenderInput): string {
     }
     if (fails.length) out.push("");
     out.push(`<details><summary>All criteria</summary>`, "");
-    for (const x of agg.rubric)
+    for (const x of agg.rubric.slice(0, MAX_LIST_ROWS))
       out.push(`- ${icon[x.verdict]} \`${escapeMd(x.id)}\`${x.score !== undefined ? ` ${x.score}/5` : ""}: ${escapeMd(x.justification) || "-"}`);
-    out.push("", "</details>", "");
+    out.push(...moreNote(MAX_LIST_ROWS, agg.rubric.length), "", "</details>", "");
   }
   if (r.fileFindings?.length) {
     out.push("### Other LLM findings", "");
-    for (const f of r.fileFindings) out.push(`- ${escapeMd(f.path)}: ${escapeMd(f.message)}`);
-    out.push("");
+    for (const f of r.fileFindings.slice(0, MAX_LIST_ROWS)) out.push(`- ${escapeMd(f.path)}: ${escapeMd(f.message)}`);
+    out.push(...moreNote(MAX_LIST_ROWS, r.fileFindings.length), "");
   }
   for (const n of r.notes) out.push(`> ⚠️ ${escapeMd(n)}`, "");
-  out.push("---", "", renderFeedback(agg.rubric ?? []), "");
-  out.push(
+  const head = out.join("\n");
+  const tail: string[] = ["---", "", renderFeedback(agg.rubric ?? []), ""];
+  tail.push(
     `<sub>Mode: ${escapeMd(r.mode)} · ~${r.tokensEstimate} tokens (estimate)` +
       (r.policyFiles?.length
         ? ` · Policy: ${r.policyFiles.map((p) => escapeMd(p.path) + (p.truncated ? " (truncated)" : "")).join(", ")}`
@@ -101,7 +122,7 @@ export function renderComment(r: RenderInput): string {
         : "") +
       ` · MergeJudge never merges PRs itself</sub>`,
   );
-  return out.join("\n");
+  return capBody(head, "\n" + tail.join("\n"));
 }
 
 export const CHECK_NAME = "mergejudge/lane";
@@ -115,6 +136,6 @@ export function checkSummary(agg: Aggregate): { title: string; summary: string }
   const n = (l: Lane) => agg.files.filter((f) => f.lane === l).length;
   return {
     title: `Lane: ${agg.lane}`,
-    summary: `${renderLaneExplanation(agg)}\n\n${EMOJI[agg.lane]} Overall lane **${agg.lane}** — ${n("auto")} auto, ${n("review")} review, ${n("block")} block file(s).`,
+    summary: capBody(renderLaneExplanation(agg), `\n\n${EMOJI[agg.lane]} Overall lane **${agg.lane}** — ${n("auto")} auto, ${n("review")} review, ${n("block")} block file(s).`),
   };
 }

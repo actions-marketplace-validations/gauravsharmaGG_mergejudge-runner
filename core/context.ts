@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import type { PrFile } from "./types.js";
 
 /** One read-only piece of context sent next to the diff in `review.mode: context`. */

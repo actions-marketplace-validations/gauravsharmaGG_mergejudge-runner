@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import { changedSymbols, excerpt, gatherContext, resolveImport, type ContextOptions, type ContextPiece, type ContextSource } from "./context.js";
 import { findReferences, importersOf, isSensitivePath, type IndexSnapshot } from "./deepindex.js";
 import type { PrFile } from "./types.js";

@@ -1,4 +1,3 @@
-// Vendored from the MergeJudge core. Keep in sync.
 import type { Finding } from "./triage.js";
 import { findingText, parseMarker } from "./inline.js";
 

@@ -65,16 +65,19 @@ export function groupMissed(items: readonly MissedItem[]): MissedGroup[] {
   }));
 }
 
-/** Text that tries to relax a check or approve something. Such a group never becomes a criterion. */
-export const RELAXING_RE = /\b(ignor\w*|skip\w*|allow\w*|permit\w*|don'?t|do not|dont|doesn'?t|does not|no need|not needed|unnecessary|needless|fine|ok(?:ay)?|approv\w*|lgtm|safe to|bypass\w*|disabl\w*|turn(?:ed)? off|relax\w*|exempt\w*|whitelist\w*|allowlist\w*|acceptable|never (?:flag|fail|block)|can be (?:removed|dropped)|trust\w*|auto[- ]?merg\w*|should not|shouldn'?t|nit(?:pick)?s?|optional|not (?:a|an) (?:bug|issue|problem))\b/i;
+/**
+ * Text that tries to relax a check or approve something. Such a group never becomes a criterion. Plain tightening
+ * wording ("don't use X here", "should not mutate the input", "avoid ...", "nit: ...") is not listed on purpose.
+ */
+export const RELAXING_RE = /\b(ignor\w*|skip\w*|allow\w*|permit\w*|bypass\w*|disabl\w*|turn(?:ed|ing)? off|exempt\w*|whitelist\w*|allowlist\w*|relax\w*|approv\w*|lgtm|(?:is|are|looks?|seems?|it['’]?s|that['’]?s)\s+(?:fine|ok(?:ay)?)|(?:fine|ok(?:ay)?)\s+(?:to|as is|here)|no need|not needed|unnecessary|safe to|acceptable|not (?:a|an) (?:bug|issue|problem)|can be (?:removed|dropped)|(?:never|(?:do(?:n['’]?t| not)|dont))\s+(?:flag|fail|block|worry|bother)|trust\w*|auto[- ]?merg\w*)\b/i;
 
-/** Security-related wording (used to name the reason a refused group was refused). */
+/** Security or secret wording. Any comment that touches it is refused, whether it relaxes a check or not. */
 export const SECURITY_RE = /(secret|credential|token|passw|api[ _-]?key|private[ _-]?key|\bauth|permission|csrf|\bxss\b|inject|sanitiz|escap|encrypt|crypto|\btls\b|\bssl\b|certificate|cookie|session|oauth|\bjwt\b|vulnerab|exploit|secur|\bcve\b|\bsql\b|\brce\b|sandbox|exfil|leak)/i;
 
 /** The first reason an item's text may not become a criterion, or null. */
-export function refuseReason(text: string): "relaxing" | "security-relaxing" | null {
-  if (!RELAXING_RE.test(text)) return null;
-  return SECURITY_RE.test(text) ? "security-relaxing" : "relaxing";
+export function refuseReason(text: string): "relaxing" | "security" | null {
+  if (SECURITY_RE.test(text)) return "security";
+  return RELAXING_RE.test(text) ? "relaxing" : null;
 }
 
 /** Defanged, delimiter-free, capped lines "Things reviewers here caught", newest first. Input order is kept when `at` is missing. */

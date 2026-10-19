@@ -55412,11 +55412,11 @@ function groupMissed(items) {
     actors: [...new Set(g.items.map((i) => i.actor))].sort()
   }));
 }
-var RELAXING_RE = /\b(ignor\w*|skip\w*|allow\w*|permit\w*|don'?t|do not|dont|doesn'?t|does not|no need|not needed|unnecessary|needless|fine|ok(?:ay)?|approv\w*|lgtm|safe to|bypass\w*|disabl\w*|turn(?:ed)? off|relax\w*|exempt\w*|whitelist\w*|allowlist\w*|acceptable|never (?:flag|fail|block)|can be (?:removed|dropped)|trust\w*|auto[- ]?merg\w*|should not|shouldn'?t|nit(?:pick)?s?|optional|not (?:a|an) (?:bug|issue|problem))\b/i;
+var RELAXING_RE = /\b(ignor\w*|skip\w*|allow\w*|permit\w*|bypass\w*|disabl\w*|turn(?:ed|ing)? off|exempt\w*|whitelist\w*|allowlist\w*|relax\w*|approv\w*|lgtm|(?:is|are|looks?|seems?|it['’]?s|that['’]?s)\s+(?:fine|ok(?:ay)?)|(?:fine|ok(?:ay)?)\s+(?:to|as is|here)|no need|not needed|unnecessary|safe to|acceptable|not (?:a|an) (?:bug|issue|problem)|can be (?:removed|dropped)|(?:never|(?:do(?:n['’]?t| not)|dont))\s+(?:flag|fail|block|worry|bother)|trust\w*|auto[- ]?merg\w*)\b/i;
 var SECURITY_RE = /(secret|credential|token|passw|api[ _-]?key|private[ _-]?key|\bauth|permission|csrf|\bxss\b|inject|sanitiz|escap|encrypt|crypto|\btls\b|\bssl\b|certificate|cookie|session|oauth|\bjwt\b|vulnerab|exploit|secur|\bcve\b|\bsql\b|\brce\b|sandbox|exfil|leak)/i;
 function refuseReason(text) {
-  if (!RELAXING_RE.test(text)) return null;
-  return SECURITY_RE.test(text) ? "security-relaxing" : "relaxing";
+  if (SECURITY_RE.test(text)) return "security";
+  return RELAXING_RE.test(text) ? "relaxing" : null;
 }
 function missedPromptItems(items, delim) {
   const out = [];
@@ -55567,7 +55567,7 @@ function collectCommentSuggestions(missed, cfg) {
     out.used = true;
     const rep = g.items[0];
     if (g.items.some((i) => refuseReason(i.text))) {
-      out.skipped.push(`A point raised on ${g.prs.length} PRs was not turned into a check: its wording could relax a check, and learning never does that.`);
+      out.skipped.push(`A point raised on ${g.prs.length} PRs was not turned into a check: its wording could relax a check or touches security, and learning never does that.`);
       continue;
     }
     const excerpt2 = defang(rep.text, EXCERPT_MAX).replace(/["\\]/g, "'").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, " ").replace(/\s+/g, " ").trim();

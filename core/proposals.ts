@@ -223,7 +223,7 @@ export function collectCommentSuggestions(missed: MissedItem[] | undefined, cfg:
   for (const g of groups) {
     out.used = true;
     const rep = g.items[0]!;
-    if (g.items.some((i) => refuseReason(i.text))) { out.skipped.push(`A point raised on ${g.prs.length} PRs was not turned into a check: its wording could relax a check, and learning never does that.`); continue; }
+    if (g.items.some((i) => refuseReason(i.text))) { out.skipped.push(`A point raised on ${g.prs.length} PRs was not turned into a check: its wording could relax a check or touches security, and learning never does that.`); continue; }
     const excerpt = defang(rep.text, EXCERPT_MAX).replace(/["\\]/g, "'").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, " ").replace(/\s+/g, " ").trim();
     if (excerpt.length < 10) continue;
     const id = `${LEARNED_ID_PREFIX}${fnv8(rep.fingerprint)}`;

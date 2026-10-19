@@ -43,11 +43,27 @@ describe("comment learning (engine)", () => {
     expect(missedPromptItems(Array.from({ length: 9 }, (_, i) => ({ text: `point number ${i}`, at: `2026-01-0${i + 1}` })), "D")).toHaveLength(5);
   });
 
-  it("refuses relaxing text, with a security flag", () => {
+  it("refuses relaxing text and anything that touches security wording", () => {
     expect(refuseReason("you can ignore this check")).toBe("relaxing");
-    expect(refuseReason("it is ok to skip the token check")).toBe("security-relaxing");
+    expect(refuseReason("it is ok to skip the token check")).toBe("security");
     expect(refuseReason("Missing await on the commit call")).toBeNull();
     expect(refuseReason(learnedQuestion("Missing await on the commit call"))).toBeNull();
+    for (const t of ["skip this", "allow it", "permit that", "bypass the lint", "disable the rule", "turn off the check", "exempt this file", "whitelist it", "allowlist it", "relax the limit", "approve it", "LGTM", "this is fine", "that is ok", "no need for a test", "not needed", "unnecessary check", "safe to merge", "acceptable here", "not a bug", "not an issue", "can be removed", "can be dropped", "never flag this", "never fail on this", "never block this", "don't flag this", "do not worry about it", "don't bother", "trust the caller", "auto-merge it"]) {
+      expect(refuseReason(t), t).toBe("relaxing");
+    }
+  });
+
+  it("lets tightening comments count", () => {
+    for (const t of ["don't use eval here", "do not call this in a loop", "should not mutate the input", "shouldn't mutate the input", "avoid nested ternaries", "nit: rename this variable", "nitpick: add a blank line", "optional chaining is missing here", "needless copy in the hot path"]) {
+      expect(refuseReason(t), t).toBeNull();
+      expect(refuseReason(learnedQuestion(t)), t).toBeNull();
+    }
+  });
+
+  it("refuses security and secret wording even when it tightens", () => {
+    for (const t of ["don't log the api key", "should not expose the secret", "validate the password length", "avoid string-built sql", "escape the html output", "check the session cookie flags"]) {
+      expect(refuseReason(t), t).toBe("security");
+    }
   });
 
   it("proposes at most 3 learned checks that only raise to review, and the guard accepts exactly those", () => {

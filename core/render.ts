@@ -43,6 +43,8 @@ export interface RenderInput {
   fileFindings?: { path: string; message: string }[];
   policyFiles?: { path: string; truncated: boolean }[];
   breakdown?: { system: number; policy: number; rubric: number; diff: number; context?: number; tools?: number; tool_calls?: number; output: number; total: number };
+  /** The repo config's approval settings; the footer mentions auto-merge only when enabled with mode auto-merge-only. */
+  approval?: { enabled?: boolean; mode?: string } | null;
 }
 
 export function renderLaneExplanation(agg: Aggregate): string {
@@ -54,6 +56,15 @@ export function renderLaneExplanation(agg: Aggregate): string {
     ...moreNote(MAX_LIST_ROWS, explanation.reasons.length),
     "", "</details>",
   ].join("\n");
+}
+
+/** Footer note. MergeJudge never calls a merge API; approval.mode auto-merge-only only asks GitHub to auto-merge. */
+export const MERGE_NOTE = "MergeJudge doesn't merge PRs itself.";
+export const AUTO_MERGE_NOTE = "With approval.mode: auto-merge-only, it asks GitHub to auto-merge auto-lane PRs.";
+
+/** The footer's merge note: the second sentence only when the repo's config turns on approval with mode auto-merge-only. */
+export function mergeNote(approval?: { enabled?: boolean; mode?: string } | null): string {
+  return approval?.enabled === true && approval.mode === "auto-merge-only" ? `${MERGE_NOTE} ${AUTO_MERGE_NOTE}` : MERGE_NOTE;
 }
 
 export function renderComment(r: RenderInput): string {
@@ -120,7 +131,7 @@ export function renderComment(r: RenderInput): string {
       (r.breakdown
         ? ` · tokens system ${r.breakdown.system}/policy ${r.breakdown.policy}/rubric ${r.breakdown.rubric}/diff ${r.breakdown.diff}${r.breakdown.context ? `/context ${r.breakdown.context}` : ""}${r.breakdown.tools ? `/tools ${r.breakdown.tools} (${r.breakdown.tool_calls ?? 0} calls)` : ""}/out ${r.breakdown.output}`
         : "") +
-      ` · MergeJudge never merges PRs itself</sub>`,
+      ` · ${mergeNote(r.approval)}</sub>`,
   );
   return capBody(head, "\n" + tail.join("\n"));
 }

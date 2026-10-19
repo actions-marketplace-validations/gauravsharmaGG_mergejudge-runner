@@ -54448,6 +54448,12 @@ function removesAuthCheck(patch) {
   if (lines.some((l) => l.op === "add" && AUTH_CHECK.test(l.text))) return false;
   return lines.some((l) => l.op === "del" && AUTH_CHECK.test(l.text));
 }
+function isMergeJudgeConfigPath(path2, extra = []) {
+  const norm3 = (p) => p.replace(/^\.\//, "").toLowerCase();
+  const base = norm3(path2).split("/").pop() ?? "";
+  if (base === ".mergejudge.yml" || base === ".mergejudge.yaml") return true;
+  return extra.some((e) => e && norm3(e) === norm3(path2));
+}
 var CODE_AUTO_NEVER_GLOBS = [".github/**", "**/.env*", "_headers", "**/_headers"];
 var ALWAYS_REVIEW_GLOBS = ["_headers", "**/_headers"];
 var CODE_AUTO_NEVER_EXT = /* @__PURE__ */ new Set(["sql", "sh", "bash", "zsh", "ps1", "wasm"]);
@@ -54460,12 +54466,12 @@ function codeAutoBlocker(file2, paths, changed, ca) {
   if (changed > ca.max_lines) return `code file with ${changed} changed lines (lanes.code_auto.max_lines ${ca.max_lines})`;
   return void 0;
 }
-function classifyFile(file2, cfg) {
-  const v = classifyFileInner(file2, cfg);
+function classifyFile(file2, cfg, extraConfigPaths = []) {
+  const v = classifyFileInner(file2, cfg, extraConfigPaths);
   const skipped = scanSecrets(file2.patch, file2.path).skipped;
   return skipped.length ? { ...v, reasons: [...v.reasons, ...skipped] } : v;
 }
-function classifyFileInner(file2, cfg) {
+function classifyFileInner(file2, cfg, extraConfigPaths) {
   let lane = "auto";
   const reasons = [];
   const raise = (l, r) => {
@@ -54475,6 +54481,8 @@ function classifyFileInner(file2, cfg) {
   const paths = [file2.path, ...file2.previousPath ? [file2.previousPath] : []];
   const secrets = findSecrets(file2.patch, file2.path);
   if (secrets.length) raise("block", `possible secret in added lines (${secrets.join(", ")})`);
+  const configFile = paths.some((p) => isMergeJudgeConfigPath(p, extraConfigPaths));
+  if (configFile) raise("review", "MergeJudge config file (.mergejudge.yml): always needs human review");
   const isProtected = paths.some((p) => matchesAny(p, cfg.lanes.protected));
   if (isProtected) {
     raise("review", "protected path");
@@ -54505,10 +54513,10 @@ function classifyFileInner(file2, cfg) {
       raise("review", "not in an auto-merge path");
     }
   }
-  return { path: file2.path, lane, reasons };
+  return { path: file2.path, lane, reasons, ...configFile ? { configFile: true } : {} };
 }
-function classifyFiles(files, cfg) {
-  const out = files.map((f) => classifyFile(f, cfg));
+function classifyFiles(files, cfg, extraConfigPaths = []) {
+  const out = files.map((f) => classifyFile(f, cfg, extraConfigPaths));
   const ca = cfg.lanes.code_auto;
   if (ca?.enabled) {
     const lines = (i) => files[i].additions + files[i].deletions;
@@ -54574,7 +54582,7 @@ function aggregate(files, labels, cfg, llm, pr) {
   const findingPaths = new Set((llm?.findings ?? []).map((f) => f.path));
   const agentMarked = isAgentPr({ labels, body: pr?.body ?? null });
   const trust = trustedAuthor(cfg, { author: pr?.user ?? void 0, agentMarked });
-  const verdicts = classifyFiles(files, cfg).map((v) => {
+  const verdicts = classifyFiles(files, cfg, pr?.configPaths).map((v) => {
     const l = llm?.files.get(v.path);
     if (v.autoCandidate) {
       const d = codeAutoDecision(v, { ai: l, findingPaths, rubric: llm?.rubric ?? [], author: pr?.user ?? void 0, agentMarked }, cfg);
@@ -55785,11 +55793,15 @@ async function applyApproval(cfg, lane, actions, log = () => {
   const say = (m) => (log(m), m);
   if (cfg.mode === "none") return say("approval: mode none, nothing to do");
   if (cfg.mode === "bot-approve") {
-    const allowed = botMayApprove(cfg, lane);
+    const allowed = !ctx.configChange && botMayApprove(cfg, lane);
     if (!allowed) {
       let dismissed = 0;
       if (cfg.enabled && actions.dismissOwnApprovals)
-        dismissed = await actions.dismissOwnApprovals(`MergeJudge: lane is now ${lane}; approval withdrawn.`);
+        dismissed = await actions.dismissOwnApprovals(
+          ctx.configChange ? "MergeJudge: this PR changes the MergeJudge config file; approval withdrawn." : `MergeJudge: lane is now ${lane}; approval withdrawn.`
+        );
+      if (ctx.configChange)
+        return say("approval: PR changes the MergeJudge config file; no bot approval" + (dismissed ? `; dismissed ${dismissed} earlier MergeJudge approval(s)` : ""));
       return say(
         (lane === "block" ? "approval: lane is block, no bot approval in block lane" : `approval: lane is ${lane}, bot may not approve (needs ${cfg.human_approvers[lane]} human approver(s))`) + (dismissed ? `; dismissed ${dismissed} earlier MergeJudge approval(s)` : "")
       );
@@ -55799,6 +55811,7 @@ async function applyApproval(cfg, lane, actions, log = () => {
     await actions.approve();
     return say(`approval: did submit an APPROVE review (lane ${lane})`);
   }
+  if (ctx.configChange) return say("approval: PR changes the MergeJudge config file; no bot action");
   if (lane === "block") return say("approval: lane is block, no bot action");
   if (lane !== "auto") return say(`approval: lane is ${lane}, no bot action (needs ${cfg.human_approvers[lane]} human approver(s))`);
   if (!cfg.enabled) return say(`approval: disabled; would enable native auto-merge (${cfg.merge_method})`);
@@ -57489,7 +57502,7 @@ async function produceReviewResult(o) {
       await o.llmCache.put({ llm, tokens: tokens2, breakdown: res.breakdown, policiesUsed: policies.used }).catch((e) => log.warning(`Could not cache LLM result: ${e.message}`));
     }
   }
-  const agg = aggregate(files, labels, cfg, llm, { body: pr.body ?? null, user: pr.user ?? null });
+  const agg = aggregate(files, labels, cfg, llm, { body: pr.body ?? null, user: pr.user ?? null, configPaths: o.configPaths });
   let findings = llm?.findings ?? [];
   if (llm && cfg.learning.enabled && o.learned?.length) {
     const block = new Set([...llm.files].filter(([, v]) => v.lane === "block").map(([p]) => p));
@@ -57571,7 +57584,7 @@ ${checkFallbackNote(r.lane, status)}`);
       dismissOwnApprovals: (msg) => dismissOwnApprovals(ok, repo, r.prNumber, c.botLogin, msg)
     },
     log.info,
-    { appToken: c.appToken }
+    { appToken: c.appToken, configChange: r.agg.files.some((f) => f.configFile || isMergeJudgeConfigPath(f.path, c.configPaths)) }
   );
   if (c.onSnapshot) {
     try {
@@ -57601,6 +57614,7 @@ async function runReview(o) {
     cfg,
     cfgRef,
     files,
+    configPaths: o.configPaths,
     provider,
     providerNote: note,
     keyNote: o.keyNote,
@@ -57623,6 +57637,7 @@ async function runReview(o) {
     cfg,
     appToken: o.appToken,
     botLogin: o.botLogin,
+    configPaths: o.configPaths,
     log: o.log,
     onResult: o.onResult,
     onSnapshot: o.onSnapshot
@@ -58059,6 +58074,7 @@ async function runTriageMode() {
     cfgRef,
     appToken,
     botLogin,
+    configPaths: [getInput("config_path")].filter(Boolean),
     // review.mode: deep reads the repo from the actions/checkout workspace; without one it falls back to context mode.
     retrieveDeep: async (kept) => {
       const dir = process.env.GITHUB_WORKSPACE;

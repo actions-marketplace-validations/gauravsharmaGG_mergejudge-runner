@@ -17,7 +17,7 @@ import { canUseTools } from "./llm/provider.js";
 import { filterPolicyPaths, loadPolicies, type Policies } from "./policy.js";
 import { CHECK_NAME, EMOJI, renderComment } from "./render.js";
 import { selectCriteria } from "./rubrics.js";
-import { excludeFromLlm } from "./rules.js";
+import { excludeFromLlm, isMergeJudgeConfigPath } from "./rules.js";
 import { gatherContext, type ContextPiece, type ContextSource } from "./context.js";
 import { DELIM, runTriage, type Finding, type TokenBreakdown, type TriageResult } from "./triage.js";
 
@@ -52,6 +52,8 @@ export interface ReviewInput {
   reviewNotes?: string[];
   /** Hosted callers only: AI is skipped for this review (kill switch or PR too large). Rules-only; this neutral line is the one note shown. */
   skipAi?: string;
+  /** Custom config file path(s) (Action `config_path`) treated like `.mergejudge.yml`: always review, never bot-approved. */
+  configPaths?: string[];
   /** Hosted callers only: called with the listed files for a hosted-AI review; a returned note skips the model like `skipAi`. */
   skipAiGate?: (files: PrFile[]) => string | null;
   /** Hosted callers only: stop listing after this many files (the rest is represented by one unlisted-files entry, so the lane can only rise). Unset = list everything (Action, CLI). */
@@ -148,6 +150,8 @@ export interface ProduceInput {
   cfgRef: string;
   /** Already-fetched PR files. */
   files: PrFile[];
+  /** Custom config file path(s), as in ReviewInput.configPaths. */
+  configPaths?: string[];
   /** Result of createProvider; `providerNote` is its note when no provider could be built. */
   provider: LlmProvider | null;
   providerNote?: string;
@@ -306,7 +310,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
     }
   }
 
-  const agg = aggregate(files, labels, cfg, llm, { body: pr.body ?? null, user: pr.user ?? null });
+  const agg = aggregate(files, labels, cfg, llm, { body: pr.body ?? null, user: pr.user ?? null, configPaths: o.configPaths });
   // Known false alarms: hide or fold repeats of patterns reviewers keep dismissing. Lanes, labels and rubric stay as aggregated.
   let findings = llm?.findings ?? [];
   if (llm && cfg.learning.enabled && o.learned?.length) {
@@ -338,6 +342,8 @@ export interface PostContext {
   cfg: Config;
   appToken: boolean;
   botLogin: string | null;
+  /** Custom config file path(s), as in ReviewInput.configPaths. */
+  configPaths?: string[];
   log: ReviewInput["log"];
   onResult?: ReviewInput["onResult"];
   /** Called with the final lane and aggregate after everything is posted (the Worker records what drove the lane). */
@@ -385,7 +391,8 @@ export async function postReviewResult(r: ReviewResult, c: PostContext): Promise
       approve: () => approvePr(ok, repo, r.prNumber),
       dismissOwnApprovals: (msg) => dismissOwnApprovals(ok, repo, r.prNumber, c.botLogin, msg),
     },
-    log.info, { appToken: c.appToken },
+    log.info,
+    { appToken: c.appToken, configChange: r.agg.files.some((f) => f.configFile || isMergeJudgeConfigPath(f.path, c.configPaths)) },
   );
   if (c.onSnapshot) {
     try {
@@ -415,13 +422,13 @@ export async function runReview(o: ReviewInput): Promise<"auto" | "review" | "bl
   const { provider, note } = learning || skipAi ? { provider: null, note: undefined } : createProvider(cfg.provider, env, { ...o.bindings, onCall: o.onLlmCall });
   const result = await produceReviewResult({
     ref: `${repo.owner}/${repo.repo}#${pr.number}`,
-    pr, cfg, cfgRef, files, provider, providerNote: note, keyNote: o.keyNote, noProviderNote: o.noProviderNote, reviewNotes, skipAi,
+    pr, cfg, cfgRef, files, configPaths: o.configPaths, provider, providerNote: note, keyNote: o.keyNote, noProviderNote: o.noProviderNote, reviewNotes, skipAi,
     readRepoFile: (p, ref) => fetchRepoFile(ok, repo, p, ref),
     contextSource: o.contextSource ?? githubContextSource(ok, repo, pr.head.sha),
     deep: o.deep, retrieveDeep: o.retrieveDeep, learned: o.learned, lessons: o.lessons, outcomeStats: o.outcomeStats, log: o.log, llmCache: o.llmCache,
   });
   return postReviewResult(result, {
-    ok, repo, cfg, appToken: o.appToken, botLogin: o.botLogin, log: o.log, onResult: o.onResult, onSnapshot: o.onSnapshot,
+    ok, repo, cfg, appToken: o.appToken, botLogin: o.botLogin, configPaths: o.configPaths, log: o.log, onResult: o.onResult, onSnapshot: o.onSnapshot,
   });
 }
 

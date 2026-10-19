@@ -9,6 +9,7 @@ import { buildIndex } from "../core/deepindex.js";
 import type { RunnerJobPayload } from "../core/protocol.js";
 import { cachePaths, cachePolicyFromEnv, cleanupCache, DEFAULT_CACHE, SnapshotStore, touchRepo, withRepoLock } from "../src/cache.js";
 import { produceResult } from "../src/job.js";
+import { VERSION } from "../src/version.js";
 import { afterLocalJob, GitSource, LOCAL_INDEX_BOUNDS, LOCAL_LIMITS, LocalCodeError, localPrFiles, prepareLocalJob, remoteUrl, resolveLocalCode, splitPatches, type LocalCodeOptions } from "../src/localcode.js";
 import { runLoop } from "../src/run.js";
 import { captureLog, FakeWorker, makeFakeClaude, tmp, tok, writeCfg } from "./helpers.js";
@@ -429,6 +430,6 @@ describe("end to end: runner job path against a real git repo (file:// remote, f
     expect(code).toBe(0);
     const hb = w.of(/^\/heartbeat$/)[0]!;
     expect(hb.body.features).toEqual(["local-code"]);
-    expect(hb.body.version).toBe("0.4.7");
+    expect(hb.body.version).toBe(VERSION);
   });
 });

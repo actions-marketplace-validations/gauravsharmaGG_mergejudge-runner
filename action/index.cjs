@@ -54738,6 +54738,11 @@ function renderLaneExplanation(agg) {
     "</details>"
   ].join("\n");
 }
+var MERGE_NOTE = "MergeJudge doesn't merge PRs itself.";
+var AUTO_MERGE_NOTE = "With approval.mode: auto-merge-only, it asks GitHub to auto-merge auto-lane PRs.";
+function mergeNote(approval) {
+  return approval?.enabled === true && approval.mode === "auto-merge-only" ? `${MERGE_NOTE} ${AUTO_MERGE_NOTE}` : MERGE_NOTE;
+}
 function renderComment(r) {
   const { agg } = r;
   const flagged = agg.files.filter((f) => f.lane !== "auto");
@@ -54794,7 +54799,7 @@ function renderComment(r) {
   const head = out.join("\n");
   const tail = ["---", "", renderFeedback(agg.rubric ?? []), ""];
   tail.push(
-    `<sub>Mode: ${escapeMd(r.mode)} \xB7 ~${r.tokensEstimate} tokens (estimate)` + (r.policyFiles?.length ? ` \xB7 Policy: ${r.policyFiles.map((p) => escapeMd(p.path) + (p.truncated ? " (truncated)" : "")).join(", ")}` : "") + (r.breakdown ? ` \xB7 tokens system ${r.breakdown.system}/policy ${r.breakdown.policy}/rubric ${r.breakdown.rubric}/diff ${r.breakdown.diff}${r.breakdown.context ? `/context ${r.breakdown.context}` : ""}${r.breakdown.tools ? `/tools ${r.breakdown.tools} (${r.breakdown.tool_calls ?? 0} calls)` : ""}/out ${r.breakdown.output}` : "") + ` \xB7 MergeJudge never merges PRs itself</sub>`
+    `<sub>Mode: ${escapeMd(r.mode)} \xB7 ~${r.tokensEstimate} tokens (estimate)` + (r.policyFiles?.length ? ` \xB7 Policy: ${r.policyFiles.map((p) => escapeMd(p.path) + (p.truncated ? " (truncated)" : "")).join(", ")}` : "") + (r.breakdown ? ` \xB7 tokens system ${r.breakdown.system}/policy ${r.breakdown.policy}/rubric ${r.breakdown.rubric}/diff ${r.breakdown.diff}${r.breakdown.context ? `/context ${r.breakdown.context}` : ""}${r.breakdown.tools ? `/tools ${r.breakdown.tools} (${r.breakdown.tool_calls ?? 0} calls)` : ""}/out ${r.breakdown.output}` : "") + ` \xB7 ${mergeNote(r.approval)}</sub>`
   );
   return capBody(head, "\n" + tail.join("\n"));
 }
@@ -57896,6 +57901,7 @@ async function produceReviewResult(o) {
       agg: agg2,
       mode: "rules-only",
       tokensEstimate: 0,
+      approval: cfg.approval,
       notes: [proposal ? "Head is a learning proposal branch \u2014 LLM skipped." : "Head is the learning branch \u2014 LLM skipped."]
     });
     return {
@@ -58018,7 +58024,8 @@ async function produceReviewResult(o) {
     notes,
     policyFiles: policies.used,
     fileFindings: findings.filter((f) => f.line === void 0),
-    breakdown: breakdown ?? void 0
+    breakdown: breakdown ?? void 0,
+    approval: cfg.approval
   });
   return {
     schemaVersion: 1,

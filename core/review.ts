@@ -201,7 +201,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
     };
     agg.explanation = explainLane(agg);
     const body = renderComment({
-      agg, mode: "rules-only", tokensEstimate: 0, notes: [proposal ? "Head is a learning proposal branch — LLM skipped." : "Head is the learning branch — LLM skipped."],
+      agg, mode: "rules-only", tokensEstimate: 0, approval: cfg.approval, notes: [proposal ? "Head is a learning proposal branch — LLM skipped." : "Head is the learning branch — LLM skipped."],
     });
     return {
       schemaVersion: 1, kind: "learning-block", prNumber: number, headSha: pr.head.sha, prNodeId: pr.node_id,
@@ -321,7 +321,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
   const body = renderComment({
     agg, mode: llm && provider ? provider.label : "rules-only", tokensEstimate: tokens, notes,
     policyFiles: policies.used, fileFindings: findings.filter((f) => f.line === undefined),
-    breakdown: breakdown ?? undefined,
+    breakdown: breakdown ?? undefined, approval: cfg.approval,
   });
   return {
     schemaVersion: 1, kind: "review", prNumber: number, headSha: pr.head.sha, prNodeId: pr.node_id,

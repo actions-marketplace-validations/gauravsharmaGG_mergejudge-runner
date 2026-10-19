@@ -7,6 +7,8 @@ import type { IndexLimits, IndexSource } from "./deepindex.js";
  * Pure ordering and bounded reading; the caller turns the texts into index entries. Stages, each de-duplicated:
  *   a. the changed files themselves
  *   b. importers of a changed file in the changed directories, then the local imports of the changed files
+ *      (read order: the imports first, then the sibling probe that finds the importers, so a big directory cannot use up
+ *      the budget before the imports are read; the resulting order lists importers first)
  *   c. the other indexable files in the changed directories
  *   d. files of the parent directories, closest first (package modules such as `__init__.py` / `index.*` before the rest)
  *   e. files found for changed identifiers, strings and env var names (code search if the source has it, else a path heuristic)
@@ -164,7 +166,11 @@ export async function readInRelevanceOrder(
   for (const p of cands) { const d = dirOf(p); const l = byDir.get(d); if (l) l.push(p); else byDir.set(d, [p]); }
   const siblings = [...new Set(dirs.flatMap((d) => byDir.get(d) ?? []))].filter((p) => !seedSet.has(p));
 
-  // b. importers in the changed directories (a bounded probe of siblings), then the imports of the changed files
+  // b. the imports of the changed files are READ first (few, and often the most useful), then a bounded probe of
+  // same-directory siblings finds the importers. In `order`, importers still come before imports.
+  const imports = [...new Set(seedPaths.flatMap((p) => { const t = texts.get(p); return typeof t === "string" ? importTargets(p, t, pathSet) : []; }))]
+    .filter((p) => candSet.has(p));
+  await read(imports);
   const probe = siblings.slice(0, SIBLING_PROBE_CAP);
   await read(probe);
   const importers = probe.filter((p) => {
@@ -172,9 +178,6 @@ export async function readInRelevanceOrder(
     return typeof t === "string" && importTargets(p, t, pathSet).some((x) => seedSet.has(x));
   });
   emit(importers);
-  const imports = [...new Set(seedPaths.flatMap((p) => { const t = texts.get(p); return typeof t === "string" ? importTargets(p, t, pathSet) : []; }))]
-    .filter((p) => candSet.has(p));
-  await read(imports);
   emit(imports);
 
   // c. other files in the changed directories

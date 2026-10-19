@@ -56489,6 +56489,11 @@ async function readInRelevanceOrder(src, all, cands, seeds, lim, now, isIndexabl
     else byDir.set(d, [p]);
   }
   const siblings = [...new Set(dirs.flatMap((d) => byDir.get(d) ?? []))].filter((p) => !seedSet.has(p));
+  const imports = [...new Set(seedPaths.flatMap((p) => {
+    const t = texts.get(p);
+    return typeof t === "string" ? importTargets(p, t, pathSet) : [];
+  }))].filter((p) => candSet.has(p));
+  await read(imports);
   const probe = siblings.slice(0, SIBLING_PROBE_CAP);
   await read(probe);
   const importers = probe.filter((p) => {
@@ -56496,11 +56501,6 @@ async function readInRelevanceOrder(src, all, cands, seeds, lim, now, isIndexabl
     return typeof t === "string" && importTargets(p, t, pathSet).some((x) => seedSet.has(x));
   });
   emit(importers);
-  const imports = [...new Set(seedPaths.flatMap((p) => {
-    const t = texts.get(p);
-    return typeof t === "string" ? importTargets(p, t, pathSet) : [];
-  }))].filter((p) => candSet.has(p));
-  await read(imports);
   emit(imports);
   await read(siblings);
   emit(siblings);

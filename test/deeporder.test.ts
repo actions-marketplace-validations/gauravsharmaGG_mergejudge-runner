@@ -53,6 +53,23 @@ describe("relevance-ordered build", () => {
     expect(r.complete).toBe(true);
   });
 
+  it("reads the imports of the changed file before the sibling probe, even when the probe would use the whole size budget", async () => {
+    const pad = "# pad\n".repeat(400); // ~2.4 KB each
+    const files: Record<string, string> = {
+      "app/helpers/changed.py": "from lib.core import thing\n\ndef go():\n    return thing\n",
+      "lib/core.py": "thing = 1\n",
+    };
+    for (let i = 0; i < 20; i++) files[`app/helpers/h${String(i).padStart(2, "0")}.py`] = `H = ${i}\n${pad}`;
+    const r = repo(files);
+    const b = await buildIndex(r.src, { repo: "o/r", sha: "s" }, lim({ maxTotalBytes: 6_000 }), Date.now, { seeds: { files: [{ path: "app/helpers/changed.py" }] } });
+    expect(b.limit).toBe("size");
+    expect(r.reads.slice(0, 2)).toEqual(["app/helpers/changed.py", "lib/core.py"]); // imports read before any sibling
+    const keys = Object.keys(b.snapshot!.files);
+    expect(keys).toContain("lib/core.py");
+    expect(keys.some((k) => k.startsWith("app/helpers/h"))).toBe(true);
+    expect(keys.length).toBeLessThan(22); // the siblings were cut by the budget, not the import
+  });
+
   it("resolves Python absolute imports for ordering", () => {
     const paths = new Set(["pkg/util.py", "pkg/sub/__init__.py", "pkg/sub/mod.py"]);
     expect(pythonAbsoluteImports("from pkg.util import helper\nimport pkg.sub\nfrom pkg.sub import mod\nimport os\n", paths).sort())

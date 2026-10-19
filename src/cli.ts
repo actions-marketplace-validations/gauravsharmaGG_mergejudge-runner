@@ -8,11 +8,12 @@ import { createApi, errorCode, NetworkError } from "./api.js";
 import { buildEngineSettings, glmKeyOf, GLM_KEY_ENV, pickDefaultEngine, runnerCaps } from "./capabilities.js";
 import { CODEX_EFFORTS, isCodexEffort } from "./engine.js";
 import { ConfigError, defaultConfigPath, loadConfig, saveConfig, validateUrl, type EngineSettings, type RunnerConfig } from "./config.js";
+import { detectClis, engineLine, engineLines, glmReport, NO_ENGINE_MESSAGE, readyEngines, unlistedEngineNotes, type EngineReport } from "./detect.js";
 import { createLogger, tokenPrefix, type Logger } from "./redact.js";
 import { deviceLogin } from "./login.js";
 import { resolveLocalCode } from "./localcode.js";
 import { runLoop } from "./run.js";
-import { buildUnit, checkCli, cliWarnings, DEFAULT_URL, defaultExec, findOnPath, installAutostart, type ExecFn } from "./setup.js";
+import { buildUnit, DEFAULT_URL, defaultExec, installAutostart, type ExecFn } from "./setup.js";
 import { FEATURES, MODES, VERSION } from "./version.js";
 
 export interface CliDeps {
@@ -112,22 +113,60 @@ type Vals = Record<string, string | boolean | string[] | undefined>;
 
 const installationOpt = (v: Vals): number | undefined => (v.installation === undefined ? undefined : intOpt(v.installation as string, 0, 1, Number.MAX_SAFE_INTEGER, "installation"));
 
+/** Probes claude and codex (and counts a given GLM key) the same way for setup, login and register. */
+function detectEngines(v: Vals, deps: CliDeps, glmApiKey: string | undefined): EngineReport[] {
+  return [...detectClis({
+    env: deps.env ?? process.env, home: deps.home ?? homedir(), exec: deps.exec ?? defaultExec, fileExists: deps.fileExists,
+    claudeBin: v["claude-bin"] as string | undefined, codexBin: v["codex-bin"] as string | undefined,
+  }), glmReport(!!glmApiKey)];
+}
+
+/** The binary to store: the flag, else the common directory it was found in (off PATH), else nothing. */
+const binToStore = (v: Vals, flag: "claude-bin" | "codex-bin", reports: EngineReport[], engine: string): string | undefined =>
+  (v[flag] as string | undefined) ?? reports.find((r) => r.engine === engine)?.foundAt;
+
+/**
+ * login and register: --engine wins (only that engine, as before); otherwise every engine detected as ready is enabled,
+ * the first (claude-code, codex, glm order) is the default, and claude-code stays the not-yet-usable default when none is ready.
+ */
+function engineChoice(v: Vals, deps: CliDeps, env: Record<string, string | undefined>, out: (l: string) => void) {
+  const glmApiKey = readGlmKeyEnv(v["glm-key-env"] as string | undefined, env);
+  const requested = v.engine as string | undefined;
+  const models = (v.model as string[] | undefined) ?? [];
+  let reports: EngineReport[] = [];
+  let engine: string, settings: Record<string, EngineSettings>;
+  if (requested) {
+    engine = requested;
+    settings = buildEngineSettings([engine], pickDefaultEngine(engine, engine === "glm" && !glmApiKey && !env[GLM_KEY_ENV] ? [] : [engine]), models);
+  } else {
+    reports = detectEngines(v, deps, glmApiKey);
+    const enabled = readyEngines(reports);
+    engine = pickDefaultEngine(undefined, enabled);
+    settings = buildEngineSettings(enabled.length ? enabled : [engine], engine, models);
+    if (!enabled.length) { out(NO_ENGINE_MESSAGE); for (const l of engineLines(reports, deps.home ?? homedir(), true)) out(l); }
+  }
+  applyCodexEffort(settings, v["codex-effort"] as string | undefined);
+  return {
+    engine, settings, glmApiKey,
+    claudeBin: binToStore(v, "claude-bin", reports, "claude-code"), codexBin: binToStore(v, "codex-bin", reports, "codex"),
+  };
+}
+
+const nextStep = (engine: string) => engine === "codex" ? "Next: make sure `codex` is signed in with ChatGPT (`codex login`), then run `mergejudge-runner run`."
+  : engine === "glm" ? "Next: run `mergejudge-runner run`. GLM reviews are billed to your z.ai API key."
+  : "Next: make sure `claude` is logged in with your own subscription, then run `mergejudge-runner run`.";
+
 async function login(v: Vals, configPath: string, deps: CliDeps, out: (l: string) => void): Promise<number> {
   const env = deps.env ?? process.env;
-  const engine = (v.engine as string | undefined) ?? "claude-code";
-  const glmApiKey = readGlmKeyEnv(v["glm-key-env"] as string | undefined, env);
-  const settings = buildEngineSettings([engine], pickDefaultEngine(engine, engine === "glm" && !glmApiKey && !env[GLM_KEY_ENV] ? [] : [engine]), (v.model as string[] | undefined) ?? []);
-  applyCodexEffort(settings, v["codex-effort"] as string | undefined);
+  const { engine, settings, glmApiKey, claudeBin, codexBin } = engineChoice(v, deps, env, out);
   const cfg = await loginRunner({
     url: (v.url as string | undefined) ?? env.MERGEJUDGE_URL ?? DEFAULT_URL, name: v.name as string | undefined, engine, settings, glmApiKey, concurrency: v.concurrency as string | undefined,
-    claudeBin: v["claude-bin"] as string | undefined, codexBin: v["codex-bin"] as string | undefined, force: v.force === true, configPath, fetch: deps.fetch, env,
+    claudeBin, codexBin, force: v.force === true, configPath, fetch: deps.fetch, env,
     installation: installationOpt(v),
   }, deps, out);
   out(`Registered runner ${cfg.runnerId} (${cfg.name}). Config saved to ${configPath} (mode 600).`);
   for (const l of engineSummary(cfg, env)) out(l);
-  out(engine === "codex" ? "Next: make sure `codex` is signed in with ChatGPT (`codex login`), then run `mergejudge-runner run`."
-    : engine === "glm" ? "Next: run `mergejudge-runner run`. GLM reviews are billed to your z.ai API key."
-    : "Next: make sure `claude` is logged in with your own subscription, then run `mergejudge-runner run`.");
+  out(nextStep(engine));
   return 0;
 }
 
@@ -135,19 +174,14 @@ async function register(v: Vals, configPath: string, deps: CliDeps, out: (l: str
   const code = v.code as string | undefined, urlRaw = v.url as string | undefined;
   if (!code || !urlRaw) throw new ConfigError("register needs --code and --url");
   const env = deps.env ?? process.env;
-  const engine = (v.engine as string | undefined) ?? "claude-code";
-  const glmApiKey = readGlmKeyEnv(v["glm-key-env"] as string | undefined, env);
-  const settings = buildEngineSettings([engine], pickDefaultEngine(engine, engine === "glm" && !glmApiKey && !env[GLM_KEY_ENV] ? [] : [engine]), (v.model as string[] | undefined) ?? []);
-  applyCodexEffort(settings, v["codex-effort"] as string | undefined);
+  const { engine, settings, glmApiKey, claudeBin, codexBin } = engineChoice(v, deps, env, out);
   const cfg = await registerRunner({
     code, url: urlRaw, name: v.name as string | undefined, engine, settings, glmApiKey, concurrency: v.concurrency as string | undefined,
-    claudeBin: v["claude-bin"] as string | undefined, codexBin: v["codex-bin"] as string | undefined, force: v.force === true, configPath, fetch: deps.fetch, env,
+    claudeBin, codexBin, force: v.force === true, configPath, fetch: deps.fetch, env,
   });
   out(`Registered runner ${cfg.runnerId} (${cfg.name}). Config saved to ${configPath} (mode 600).`);
   for (const l of engineSummary(cfg, env)) out(l);
-  out(engine === "codex" ? "Next: make sure `codex` is signed in with ChatGPT (`codex login`), then run `mergejudge-runner run`."
-    : engine === "glm" ? "Next: run `mergejudge-runner run`. GLM reviews are billed to your z.ai API key."
-    : "Next: make sure `claude` is logged in with your own subscription, then run `mergejudge-runner run`.");
+  out(nextStep(engine));
   return 0;
 }
 
@@ -277,13 +311,11 @@ async function setup(v: Vals, positionals: string[], configPath: string, deps: C
   const printOnly = v["print-unit"] === true || v["dry-run-autostart"] === true;
   if (v.yes && v["no-autostart"]) throw new ConfigError("--yes and --no-autostart conflict");
   const url = (v.url as string | undefined) ?? env.MERGEJUDGE_URL ?? DEFAULT_URL;
-  const claudeBin = (v["claude-bin"] as string | undefined) ?? null;
 
   // Provider CLIs: installed and signed in? Never fatal. The probes run without ANTHROPIC_API_KEY / OPENAI_API_KEY.
-  const claudePath = claudeBin ?? findOnPath("claude", env.PATH, deps.fileExists);
-  const codexBin = (v["codex-bin"] as string | undefined) ?? null;
-  const codexPath = codexBin ?? findOnPath("codex", env.PATH, deps.fileExists);
-  const checks = [checkCli("claude", claudePath ?? "claude", env, exec), checkCli("codex", codexPath ?? "codex", env, exec)].filter((c) => c.name === "claude" || c.installed);
+  const clis = detectEngines(v, deps, undefined).filter((r) => r.engine !== "glm");
+  const claudePath = clis.find((r) => r.engine === "claude-code")?.bin ?? null;
+  const codexPath = clis.find((r) => r.engine === "codex")?.bin ?? null;
 
   let cfg: RunnerConfig;
   if (printOnly && existsSync(configPath) && !positionals[0]) {
@@ -291,12 +323,12 @@ async function setup(v: Vals, positionals: string[], configPath: string, deps: C
   } else {
     const code = positionals[0]?.trim() || undefined;
     if (positionals[0] !== undefined && !code) throw new ConfigError("the sign-up code is empty");
-    for (const c of checks) out(`${c.name}: ${c.installed ? (c.signedIn ? "installed, signed in" : "installed, NOT signed in") : "not found"}`);
-    for (const w of cliWarnings(checks)) out(`warning: ${w}`);
+    for (const l of engineLines(clis, home)) out(l);
 
     // Optional GLM (z.ai) key: an API-key engine, billed per use. Flag for scripts, yes/no question otherwise.
     let glmApiKey = readGlmKeyEnv(v["glm-key-env"] as string | undefined, env);
-    if (!glmApiKey && v["no-glm"] !== true && canPrompt(deps)) {
+    const asked = !glmApiKey && v["no-glm"] !== true && canPrompt(deps);
+    if (asked) {
       const wantGlm = /^(y|yes)$/i.test((await ask(deps, "Also add a GLM (z.ai) API key? It is an API-key engine, billed per use, not a subscription. [y/N] ")).trim());
       if (wantGlm) {
         const fromEnv = (env[GLM_KEY_ENV] ?? "").trim();
@@ -305,15 +337,29 @@ async function setup(v: Vals, positionals: string[], configPath: string, deps: C
         if (!glmApiKey) out("No key entered; skipping GLM.");
       }
     }
-    const enabled = [...(checks.find((c) => c.name === "claude")?.signedIn ? ["claude-code"] : []), ...(checks.find((c) => c.name === "codex")?.signedIn ? ["codex"] : []), ...(glmApiKey ? ["glm"] : [])];
+    const glm = glmReport(!!glmApiKey);
+    for (const l of asked ? [engineLine(glm, home)] : engineLines([glm], home)) out(l);
+    const ready = readyEngines([...clis, glm]);
     const requested = v.engine as string | undefined;
+    if (!ready.length && !requested) out(NO_ENGINE_MESSAGE);
+    // Several ready and a terminal: let the owner pick the default; the rest stay enabled, in their order.
+    let enabled = ready;
+    if (ready.length > 1 && !requested && canPrompt(deps)) {
+      out("More than one engine is ready. Which should be the default? The others stay enabled.");
+      ready.forEach((e, i) => out(`  ${i + 1}) ${e}`));
+      const a = (await ask(deps, `Default engine (1-${ready.length}, Enter = 1): `)).trim();
+      const n = Number(a);
+      let idx = 0;
+      if (a !== "") { if (Number.isInteger(n) && n >= 1 && n <= ready.length) idx = n - 1; else out(`Not a valid number; using ${ready[0]}.`); }
+      enabled = [ready[idx]!, ...ready.filter((_, i) => i !== idx)];
+    }
     // Nothing signed in yet: keep claude-code as the (not yet usable) default, as before, unless the owner asked for another engine.
     const engine = requested && !enabled.includes(requested) && enabled.length === 0 && requested !== "glm" ? requested : pickDefaultEngine(requested, enabled);
     const settings = buildEngineSettings(enabled.includes(engine) ? enabled : [...enabled, engine], engine, (v.model as string[] | undefined) ?? []);
     applyCodexEffort(settings, v["codex-effort"] as string | undefined);
     const input = {
       url, name: v.name as string | undefined, engine, settings, glmApiKey, concurrency: v.concurrency as string | undefined,
-      claudeBin: claudeBin ?? undefined, codexBin: codexBin ?? undefined, force: v.force === true, configPath, fetch: deps.fetch, env,
+      claudeBin: binToStore(v, "claude-bin", clis, "claude-code"), codexBin: binToStore(v, "codex-bin", clis, "codex"), force: v.force === true, configPath, fetch: deps.fetch, env,
     };
     cfg = code ? await registerRunner({ ...input, code }) : await loginRunner({ ...input, installation: installationOpt(v) }, deps, out);
     out(`Registered runner ${cfg.runnerId} (${cfg.name}) with ${cfg.url}. Config saved to ${configPath} (mode 600${glmApiKey ? "; it holds your z.ai key" : ""}).`);
@@ -321,7 +367,7 @@ async function setup(v: Vals, positionals: string[], configPath: string, deps: C
     if (glmApiKey) out("GLM runs through z.ai with your API key and is billed per use. The key is stored only in the config file and is never printed.");
   }
   if (printOnly) {
-    for (const c of checks) out(`${c.name}: ${c.installed ? (c.signedIn ? "installed, signed in" : "installed, NOT signed in") : "not found"}`);
+    for (const l of [...engineLines(clis, home), ...engineLines([glmReport(!!glmKeyOf(cfg, env))], home)]) out(l);
   }
 
   // Auto-start.
@@ -371,7 +417,7 @@ async function run(v: Vals, configPath: string, deps: CliDeps, err: (l: string) 
       codex: { bin: (v["codex-bin"] as string | undefined) ?? cfg.codexBin ?? undefined, env: deps.env },
       env: deps.env,
       local: resolveLocalCode(env, cfg.localCode, { remoteUrlTemplate: v["remote-url-template"] as string | undefined, cacheMaxGb: v["cache-max-gb"] ? Number(v["cache-max-gb"]) : undefined }, deps.home),
-      exec: deps.exec,
+      exec: deps.exec, home: deps.home, fileExists: deps.fileExists,
       ...deps.runOverrides,
     });
   } finally {
@@ -387,6 +433,11 @@ async function status(configPath: string, deps: CliDeps, out: (l: string) => voi
   for (const l of engineSummary(cfg, deps.env ?? process.env)) out(l);
   if (cfg.engines?.glm && !glmKeyOf(cfg, deps.env ?? process.env)) out("glm:        enabled but no key (set glmApiKey via setup, or ZAI_API_KEY); not offered");
   else if (cfg.engines?.glm) out(`glm key:    ${cfg.glmApiKey ? "stored in the config file (hidden)" : `from $${GLM_KEY_ENV} (hidden)`}`);
+  if (showToken) {
+    const configured = [cfg.engine, ...Object.keys(cfg.engines ?? {})];
+    const found = detectClis({ env: deps.env ?? process.env, home: deps.home ?? homedir(), exec: deps.exec ?? defaultExec, fileExists: deps.fileExists, claudeBin: cfg.claudeBin, codexBin: cfg.codexBin, skip: configured });
+    for (const n of unlistedEngineNotes(configured, found)) out(`note:       ${n}`);
+  }
   out(`token:      ${showToken ? tokenPrefix(cfg.token) : "stored (hidden)"}${cfg.tokenExpiresAt ? ` (expires ${cfg.tokenExpiresAt})` : ""}`);
   const api = createApi(cfg.url, VERSION, deps.fetch);
   try {

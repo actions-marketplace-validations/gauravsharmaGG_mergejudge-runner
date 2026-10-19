@@ -8,6 +8,7 @@ import { CODEX_OUTPUT_SCHEMA, codexArgs, claudeArgs, engineEnv, parseCodexLastMe
 import { createLogger, redact } from "../src/redact.js";
 import { runLoop, type RunOptions } from "../src/run.js";
 import { cliWarnings, checkCli, defaultExec, type ExecFn } from "../src/setup.js";
+import { VERSION } from "../src/version.js";
 import {
   captureLog, DIFF_SENTINEL, ENROLL, FakeWorker, makeFakeClaude, makeFakeCodex, makePayload, pollJob, tmp, tok, TRIAGE_REPLY, writeCfg,
 } from "./helpers.js";
@@ -276,11 +277,11 @@ describe("model / engine selection", () => {
 });
 
 describe("declares capabilities", () => {
-  it("announces engines, billing and models on the runner heartbeat at start (version 0.4.7)", async () => {
+  it("announces engines, billing and models on the runner heartbeat at start (with the package version)", async () => {
     const x = loop({ engine: "codex", engines: { codex: { model: "gpt-5" }, "claude-code": {}, glm: {} }, glmApiKey: GLM_KEY });
     expect(await runLoop(x.o)).toBe(0);
     const hb = w.reqs.find((r) => r.path === "/heartbeat")!;
-    expect(hb.body.version).toBe("0.4.7");
+    expect(hb.body.version).toBe(VERSION);
     expect(hb.body.capabilities).toEqual([
       { engine: "codex", billing: "subscription", models: ["gpt-5"], defaultModel: "gpt-5" },
       { engine: "claude-code", billing: "subscription", models: [], defaultModel: null },
@@ -336,8 +337,8 @@ describe("setup: detection of claude and codex, GLM question", () => {
     const r = await setup(["--no-glm"]);
     expect(r.code).toBe(0);
     expect(r.calls).toEqual(expect.arrayContaining([["/usr/bin/codex", "login", "status"], ["/usr/bin/claude", "auth", "status"]]));
-    expect(r.out).toContain("codex: installed, signed in");
-    expect(r.out).toContain("claude: installed, signed in");
+    expect(r.out).toContain("codex: ready");
+    expect(r.out).toContain("claude-code: ready");
     expect(w.reqs.find((q) => q.path === "/register")!.body.capabilities.map((c: any) => c.engine)).toEqual(["claude-code", "codex"]);
     expect(loadConfig(cfgPath()).engine).toBe("claude-code");
   });
@@ -349,8 +350,8 @@ describe("setup: detection of claude and codex, GLM question", () => {
   });
   it("codex installed but not signed in is warned about and not declared", async () => {
     const r = await setup(["--no-glm"], {}, { claude: 0, codex: 1 });
-    expect(r.out).toContain("codex: installed, NOT signed in");
-    expect(r.out).toMatch(/warning: Codex CLI is installed but not signed in/);
+    expect(r.out).toContain("codex: installed, not signed in (Codex is not signed in with ChatGPT)");
+    expect(r.out).toContain("Run `codex login` and choose \"Sign in with ChatGPT\", then run setup again.");
     expect(w.reqs.find((q) => q.path === "/register")!.body.capabilities.map((c: any) => c.engine)).toEqual(["claude-code"]);
   });
   it("only codex signed in: codex becomes the default engine", async () => {
@@ -444,7 +445,7 @@ describe("codex requires a ChatGPT sign-in", () => {
       out: (l) => out.push(l), err: () => {},
     });
     expect(code).toBe(0);
-    expect(out.join("\n")).toMatch(/warning: Codex is signed in with an API key/);
+    expect(out.join("\n")).toContain("codex: installed, not signed in (Codex is signed in with an API key, but the runner only uses a ChatGPT sign-in");
     expect(out.join("\n")).not.toContain("sk-proj");
     expect(w.reqs.find((q) => q.path === "/register")!.body.capabilities.map((c: any) => c.engine)).toEqual(["claude-code"]);
   });

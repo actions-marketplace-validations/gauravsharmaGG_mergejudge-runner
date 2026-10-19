@@ -1,5 +1,7 @@
 /** The `run` loop: long-poll, heartbeat, execute, submit, nack, back off, rotate the token, shut down cleanly. */
+import { homedir } from "node:os";
 import { createApi, errorCode, NetworkError, type Api, type ApiResponse } from "./api.js";
+import { detectClis, unlistedEngineNotes } from "./detect.js";
 import { saveConfig, type RunnerConfig } from "./config.js";
 import { glmKeyOf, runnerCaps } from "./capabilities.js";
 import { EngineError, JobAbort, type EngineId, type EngineOptions } from "./engine.js";
@@ -35,6 +37,9 @@ export interface RunOptions {
   local?: LocalCodeOptions;
   /** Runs the `codex login status` probe (tests inject a fake). */
   exec?: ExecFn;
+  /** Home directory and file check for the off-PATH binary search (tests inject fakes). */
+  home?: string;
+  fileExists?: (p: string) => boolean;
   /** Spawn options for the codex binary. */
   codex?: EngineOptions;
   /** Environment engines copy their allowlist from, and where ZAI_API_KEY is read (default: claude.env, then process.env). */
@@ -115,6 +120,10 @@ export async function runLoop(o: RunOptions): Promise<number> {
     const c = checkCli("codex", o.codex?.bin ?? cfg.codexBin ?? "codex", engEnv, o.exec ?? defaultExec);
     if (!c.signedIn) blocked.codex = c.apiKeyLogin ? CODEX_API_KEY_REASON : c.installed ? CODEX_NOT_CHATGPT_REASON : "the codex CLI was not found on this runner";
   }
+  // Engines that are ready on this machine but were added after setup: a note only, the config is never changed.
+  const configured = [cfg.engine, ...Object.keys(cfg.engines ?? {})];
+  const found = detectClis({ env: engEnv, home: o.home ?? homedir(), exec: o.exec ?? defaultExec, fileExists: o.fileExists, claudeBin: o.claude?.bin ?? cfg.claudeBin, codexBin: o.codex?.bin ?? cfg.codexBin, skip: configured });
+  for (const n of unlistedEngineNotes(configured, found)) log.info(n);
   const local = o.local ?? resolveLocalCode(engEnv, cfg.localCode);
   const caps = runnerCaps(cfg, engEnv, new Set(Object.keys(blocked)));
   const engineOptions = (engine: EngineId): EngineOptions => {

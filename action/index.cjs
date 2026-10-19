@@ -57473,7 +57473,7 @@ async function prepareDeepIndex(e, prFiles, log = () => {
       }
       partial2 = partialIndexNote(built.snapshot) ?? void 0;
       if (partial2) notes.push(partial2);
-      if (policy === "stored") notes.push("stored index build queued");
+      notes.push(policy === "stored" ? "stored index build queued" : "temporary index built for this review; nothing stored");
     } else {
       notes.push("temporary index built for this review" + (policy === "stored" ? "; stored index build queued" : "; nothing stored"));
     }

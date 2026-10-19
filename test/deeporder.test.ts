@@ -191,6 +191,8 @@ describe("prepareDeepIndex with a partial temporary index", () => {
     if (!p.ok) return;
     expect(p.partial).toMatch(/^used a partial index \(\d+ files, most related first; (size|file) limit reached\)$/);
     expect(p.notes).toContain(p.partial);
+    expect(p.notes).toContain("temporary index built for this review; nothing stored");
+    expect(p.notes.join("\n")).not.toMatch(/queued/);
     expect(p.snap.files["deep/dir/feature.ts"]).toBeDefined();
     expect(p.snap.files["deep/dir/sib1.ts"]).toBeDefined();
     expect(p.snap.files["deep/index.ts"]).toBeDefined();
@@ -226,6 +228,17 @@ describe("prepareDeepIndex with a partial temporary index", () => {
     expect(p.ok).toBe(true);
     expect(queued).toBe(1);
     if (p.ok) expect(p.notes).toContain("stored index build queued");
+  });
+
+  it("stored policy without a store (no R2, or an account the host does not allow) never queues and says temporary", async () => {
+    const files = bigRepo({ "deep/dir/feature.ts": "export const feature = 1;\n", "deep/dir/sib1.ts": body("s1"), "deep/dir/sib2.ts": body("s2") });
+    let queued = 0;
+    const p = await prepareDeepIndex(env(files, { policy: "stored", enqueueIndex: async () => { queued++; } }), [changed]);
+    expect(p.ok).toBe(true);
+    expect(queued).toBe(0);
+    if (!p.ok) return;
+    expect(p.notes).toContain("temporary index built for this review; nothing stored");
+    expect(p.notes).not.toContain("stored index build queued");
   });
 
   it("a complete build keeps the old note and no partial text", async () => {

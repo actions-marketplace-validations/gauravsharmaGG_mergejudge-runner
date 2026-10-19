@@ -112,7 +112,8 @@ export async function prepareDeepIndex(e: DeepEnv, prFiles: PrFile[], log: (m: s
       }
       partial = partialIndexNote(built.snapshot) ?? undefined;
       if (partial) notes.push(partial);
-      if (policy === "stored") notes.push("stored index build queued");
+      // Only a stored policy (R2 bound, account allowed by the host) queues a build; everyone else is told it was temporary.
+      notes.push(policy === "stored" ? "stored index build queued" : "temporary index built for this review; nothing stored");
     } else {
       notes.push("temporary index built for this review" + (policy === "stored" ? "; stored index build queued" : "; nothing stored"));
     }

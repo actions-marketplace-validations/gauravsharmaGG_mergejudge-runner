@@ -62,7 +62,8 @@ describe("setup", () => {
   it("warns (non-fatal) when claude is missing or not signed in", async () => {
     const missing = await run([ENROLL, "--no-autostart"], { exec: () => ({ status: null }) });
     expect(missing.code).toBe(0);
-    expect(missing.out).toMatch(/warning: Claude Code .* not found/);
+    expect(missing.out).toContain("claude-code: not found");
+    expect(missing.out).toMatch(/Install Claude Code \(see https:\/\/code\.claude\.com\/docs\/en\/quickstart\)/);
     const home2 = tmp("mjr-home-");
     const noLogin = await main(["setup", ENROLL, "--no-autostart", "--config", join(home2, "c", "config.json")], {
       ...base({ home: home2 }), out: () => {}, err: () => {},

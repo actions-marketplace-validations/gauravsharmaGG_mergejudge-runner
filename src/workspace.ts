@@ -7,7 +7,7 @@ import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import type { Config } from "../core/config.js";
 import type { ContextPiece } from "../core/context.js";
-import { buildIndex, JOB_LIMITS, type IndexLimits, type IndexSource } from "../core/deepindex.js";
+import { buildIndex, JOB_LIMITS, partialIndexNote, type IndexLimits, type IndexSource } from "../core/deepindex.js";
 import { retrieveDeepContext } from "../core/deepretrieve.js";
 import { excludeFromLlm } from "../core/rules.js";
 import type { PrFile } from "../core/types.js";
@@ -55,7 +55,7 @@ export async function retrieveFromWorkspace(
 ): Promise<WorkspaceDeep> {
   const src = new WorkspaceSource(dir);
   const head = (await runGit(["rev-parse", "HEAD"], { cwd: dir, allowFail: true })).stdout.trim() || "workspace";
-  const built = await buildIndex(src, { repo: repoName, sha: head }, limits).catch((e) => {
+  const built = await buildIndex(src, { repo: repoName, sha: head }, limits, Date.now, { seeds: { files: kept.map((f) => ({ path: f.path, patch: f.patch })) } }).catch((e) => {
     if (e instanceof WorkspaceError) throw e;
     throw new WorkspaceError(`could not list the workspace files: ${(e as Error).message}`);
   });
@@ -63,6 +63,8 @@ export async function retrieveFromWorkspace(
   const skip = (p: string) => excludeFromLlm([{ path: p }], cfg.diff_exclude).skipped.length > 0;
   const r = await retrieveDeepContext(built.snapshot, kept, { skip }, log);
   const notes = [`Deep mode from the Actions checkout (${head.slice(0, 7)}): repo context was retrieved from an in-memory index of the checked-out files and reviewed in one pass (no tool calls).`];
-  if (built.snapshot.partial) notes.push(`index is partial (${built.snapshot.partial.indexed}/${built.snapshot.partial.total} files: ${built.snapshot.partial.reason})`);
+  const ordered = partialIndexNote(built.snapshot);
+  if (ordered) notes.push(`Deep mode ${ordered}.`);
+  else if (built.snapshot.partial) notes.push(`index is partial (${built.snapshot.partial.indexed}/${built.snapshot.partial.total} files: ${built.snapshot.partial.reason})`);
   return { pieces: r.pieces, notes };
 }

@@ -107,7 +107,7 @@ export async function produceResult(
   }
   result.usage = { ...result.usage, model: provider.label, engine: picked.engine, engineModel: picked.model, billing: ENGINE_BILLING[picked.engine as EngineName] };
   if (local?.secrets.hits.size) {
-    const n = applyRunnerSecretHits(result, local.secrets.hits, { policyFiles: p.policy.used, notes: bodyNotes });
+    const n = applyRunnerSecretHits(result, local.secrets.hits, { policyFiles: p.policy.used, notes: bodyNotes, approval: p.cfg.approval });
     if (n) log.warn("local secret scan raised file(s) to block", { job: job.id, files: n });
   }
   return { result, calls: provider.calls, engine: { engine: picked.engine, model: picked.model } };

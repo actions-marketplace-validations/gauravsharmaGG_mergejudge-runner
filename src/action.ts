@@ -56,6 +56,7 @@ async function runTriageMode(): Promise<void> {
   const { cfg, cfgRef } = await loadCfg(ok, repo, { ref: pr.base?.ref, sha: pr.base?.sha });
   const lane = await runReview({
     ok, repo, pr: pr as unknown as ReviewPr, cfg, cfgRef, appToken, botLogin,
+    configPaths: [core.getInput("config_path")].filter(Boolean),
     // review.mode: deep reads the repo from the actions/checkout workspace; without one it falls back to context mode.
     retrieveDeep: async (kept) => {
       const dir = process.env.GITHUB_WORKSPACE;

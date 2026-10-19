@@ -98,7 +98,7 @@ const SCAN_NOTE = "The runner's scan of the full local diff found a possible sec
  * Raises files with hits (and the PR) to block, in place, and re-renders the comment body (keeping the original notes and adding the scan note). Files whose rules verdict already
  * blocks on the same finding are left alone. Returns the number of files raised.
  */
-export function applyRunnerSecretHits(result: ReviewResult, hits: Map<string, string[]>, ctx: { policyFiles?: { path: string; truncated: boolean }[]; notes?: string[] } = {}): number {
+export function applyRunnerSecretHits(result: ReviewResult, hits: Map<string, string[]>, ctx: { policyFiles?: { path: string; truncated: boolean }[]; notes?: string[]; approval?: { enabled?: boolean; mode?: string } | null } = {}): number {
   let raised = 0;
   const agg = result.agg;
   for (const [path, names] of hits) {
@@ -122,7 +122,7 @@ export function applyRunnerSecretHits(result: ReviewResult, hits: Map<string, st
     agg, mode: result.usage.model ?? "runner", tokensEstimate: result.usage.tokens,
     notes: [...(ctx.notes ?? []), SCAN_NOTE],
     policyFiles: ctx.policyFiles, fileFindings: result.findings.filter((f) => f.line === undefined),
-    breakdown: result.usage.breakdown ?? undefined,
+    breakdown: result.usage.breakdown ?? undefined, approval: ctx.approval,
   });
   return raised;
 }

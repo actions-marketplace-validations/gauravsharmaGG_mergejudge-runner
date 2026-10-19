@@ -1,9 +1,9 @@
-name: MergeJudge
-description: Sort pull requests into auto / review / block lanes with rules and an optional bring-your-own LLM.
+name: MergeJudge AI Code Review
+description: "AI code review for pull requests: auto/review/block lanes and line comments. Bring your own AI key, or run rules-only."
 author: MergeJudge contributors
 branding:
   icon: git-pull-request
-  color: blue
+  color: purple
 runs:
   using: node24
   main: action/index.cjs
@@ -24,7 +24,7 @@ inputs:
     description: Path to the config file in the repository (read from the PR base).
     default: .mergejudge.yml
   provider:
-    description: Override provider.type (openai-compatible | anthropic | none).
+    description: Override provider.type (anthropic | openai | zai | openai-compatible | none). none = rules-only, no AI call.
     required: false
   base_url:
     description: Override provider.base_url.

@@ -56,6 +56,10 @@ export function renderLaneExplanation(agg: Aggregate): string {
   ].join("\n");
 }
 
+/** Footer note: MergeJudge never calls a merge API; approval.mode auto-merge-only only asks GitHub to auto-merge. */
+export const MERGE_NOTE =
+  "MergeJudge doesn't merge PRs itself (unless you turned on approval.mode: auto-merge-only, which asks GitHub to auto-merge auto-lane PRs)";
+
 export function renderComment(r: RenderInput): string {
   const { agg } = r;
   const flagged = agg.files.filter((f) => f.lane !== "auto");
@@ -120,7 +124,7 @@ export function renderComment(r: RenderInput): string {
       (r.breakdown
         ? ` · tokens system ${r.breakdown.system}/policy ${r.breakdown.policy}/rubric ${r.breakdown.rubric}/diff ${r.breakdown.diff}${r.breakdown.context ? `/context ${r.breakdown.context}` : ""}${r.breakdown.tools ? `/tools ${r.breakdown.tools} (${r.breakdown.tool_calls ?? 0} calls)` : ""}/out ${r.breakdown.output}`
         : "") +
-      ` · MergeJudge never merges PRs itself</sub>`,
+      ` · ${MERGE_NOTE}</sub>`,
   );
   return capBody(head, "\n" + tail.join("\n"));
 }

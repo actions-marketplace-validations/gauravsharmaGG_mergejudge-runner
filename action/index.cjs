@@ -54449,10 +54449,10 @@ function removesAuthCheck(patch) {
   return lines.some((l) => l.op === "del" && AUTH_CHECK.test(l.text));
 }
 function isMergeJudgeConfigPath(path2, extra = []) {
-  const norm3 = (p) => p.replace(/^\.\//, "").toLowerCase();
-  const base = norm3(path2).split("/").pop() ?? "";
+  const norm4 = (p) => p.replace(/^\.\//, "").toLowerCase();
+  const base = norm4(path2).split("/").pop() ?? "";
   if (base === ".mergejudge.yml" || base === ".mergejudge.yaml") return true;
-  return extra.some((e) => e && norm3(e) === norm3(path2));
+  return extra.some((e) => e && norm4(e) === norm4(path2));
 }
 var CODE_AUTO_NEVER_GLOBS = [".github/**", "**/.env*", "_headers", "**/_headers"];
 var ALWAYS_REVIEW_GLOBS = ["_headers", "**/_headers"];

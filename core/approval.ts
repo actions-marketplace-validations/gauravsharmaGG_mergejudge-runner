@@ -11,6 +11,8 @@ export interface ApprovalActions {
 export interface ApprovalContext {
   /** True when running with a GitHub App installation token (required for bot approval). */
   appToken: boolean;
+  /** The PR changes MergeJudge's own config file: no bot approval and no auto-merge, whatever the lane and settings say. */
+  configChange?: boolean;
 }
 
 /** May the bot approve in this lane? auto: bot_approve.auto. review/block: bot_approve[lane] AND bot-only (0 humans). */
@@ -35,11 +37,14 @@ export async function applyApproval(
   if (cfg.mode === "none") return say("approval: mode none, nothing to do");
 
   if (cfg.mode === "bot-approve") {
-    const allowed = botMayApprove(cfg, lane);
+    const allowed = !ctx.configChange && botMayApprove(cfg, lane);
     if (!allowed) {
       let dismissed = 0;
       if (cfg.enabled && actions.dismissOwnApprovals)
-        dismissed = await actions.dismissOwnApprovals(`MergeJudge: lane is now ${lane}; approval withdrawn.`);
+        dismissed = await actions.dismissOwnApprovals(
+          ctx.configChange ? "MergeJudge: this PR changes the MergeJudge config file; approval withdrawn." : `MergeJudge: lane is now ${lane}; approval withdrawn.`);
+      if (ctx.configChange)
+        return say("approval: PR changes the MergeJudge config file; no bot approval" + (dismissed ? `; dismissed ${dismissed} earlier MergeJudge approval(s)` : ""));
       return say(
         (lane === "block"
           ? "approval: lane is block, no bot approval in block lane"
@@ -54,6 +59,7 @@ export async function applyApproval(
   }
 
   // auto-merge-only
+  if (ctx.configChange) return say("approval: PR changes the MergeJudge config file; no bot action");
   if (lane === "block") return say("approval: lane is block, no bot action");
   if (lane !== "auto") return say(`approval: lane is ${lane}, no bot action (needs ${cfg.human_approvers[lane]} human approver(s))`);
   if (!cfg.enabled) return say(`approval: disabled; would enable native auto-merge (${cfg.merge_method})`);

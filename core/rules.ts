@@ -251,6 +251,17 @@ export function removesAuthCheck(patch: string | undefined): boolean {
   return lines.some((l) => l.op === "del" && AUTH_CHECK.test(l.text));
 }
 
+/**
+ * True for MergeJudge's own config file: basename `.mergejudge.yml` or `.mergejudge.yaml` (case-insensitive) in any
+ * directory, or one of `extra` (a custom config path, compared case-insensitively without a leading `./`).
+ */
+export function isMergeJudgeConfigPath(path: string, extra: readonly string[] = []): boolean {
+  const norm = (p: string) => p.replace(/^\.\//, "").toLowerCase();
+  const base = norm(path).split("/").pop() ?? "";
+  if (base === ".mergejudge.yml" || base === ".mergejudge.yaml") return true;
+  return extra.some((e) => e && norm(e) === norm(path));
+}
+
 /** Never code_auto candidates, whatever the config says: CI/workflow files, env files, shell/SQL/wasm. */
 const CODE_AUTO_NEVER_GLOBS = [".github/**", "**/.env*", "_headers", "**/_headers"];
 /** Hosting header files (CSP, CORS, caching) are always at least review, even if a repo config drops them from lanes.protected. */
@@ -268,13 +279,13 @@ function codeAutoBlocker(file: PrFile, paths: string[], changed: number, ca: Con
   return undefined;
 }
 
-export function classifyFile(file: PrFile, cfg: Config): FileVerdict {
-  const v = classifyFileInner(file, cfg);
+export function classifyFile(file: PrFile, cfg: Config, extraConfigPaths: readonly string[] = []): FileVerdict {
+  const v = classifyFileInner(file, cfg, extraConfigPaths);
   const skipped = scanSecrets(file.patch, file.path).skipped;
   return skipped.length ? { ...v, reasons: [...v.reasons, ...skipped] } : v;
 }
 
-function classifyFileInner(file: PrFile, cfg: Config): FileVerdict {
+function classifyFileInner(file: PrFile, cfg: Config, extraConfigPaths: readonly string[]): FileVerdict {
   let lane: Lane = "auto";
   const reasons: string[] = [];
   const raise = (l: Lane, r: string) => {
@@ -285,6 +296,11 @@ function classifyFileInner(file: PrFile, cfg: Config): FileVerdict {
 
   const secrets = findSecrets(file.patch, file.path);
   if (secrets.length) raise("block", `possible secret in added lines (${secrets.join(", ")})`);
+
+  // A PR that changes MergeJudge's own config can loosen every rule below, so it never goes auto (added, modified,
+  // removed or renamed, either side). Raised before the auto-path and code_auto branches, which only run while lane is "auto".
+  const configFile = paths.some((p) => isMergeJudgeConfigPath(p, extraConfigPaths));
+  if (configFile) raise("review", "MergeJudge config file (.mergejudge.yml): always needs human review");
 
   const isProtected = paths.some((p) => matchesAny(p, cfg.lanes.protected));
   if (isProtected) {
@@ -319,11 +335,11 @@ function classifyFileInner(file: PrFile, cfg: Config): FileVerdict {
       raise("review", "not in an auto-merge path");
     }
   }
-  return { path: file.path, lane, reasons };
+  return { path: file.path, lane, reasons, ...(configFile ? { configFile: true } : {}) };
 }
 
-export function classifyFiles(files: PrFile[], cfg: Config): FileVerdict[] {
-  const out = files.map((f) => classifyFile(f, cfg));
+export function classifyFiles(files: PrFile[], cfg: Config, extraConfigPaths: readonly string[] = []): FileVerdict[] {
+  const out = files.map((f) => classifyFile(f, cfg, extraConfigPaths));
   // PR-wide cap: too many changed lines over all candidates and none of them is a candidate.
   const ca = cfg.lanes.code_auto;
   if (ca?.enabled) {

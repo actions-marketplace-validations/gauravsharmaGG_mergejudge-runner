@@ -66,6 +66,8 @@ export function deterministicSummary(files: PrFile[]): string {
 export interface PrMeta {
   body?: string | null;
   user?: PrAuthor | null;
+  /** Custom config file path(s) (Action `config_path`) treated like `.mergejudge.yml`. */
+  configPaths?: string[];
 }
 
 /**
@@ -79,7 +81,7 @@ export function aggregate(files: PrFile[], labels: string[], cfg: Config, llm: L
   const findingPaths = new Set((llm?.findings ?? []).map((f) => f.path));
   const agentMarked = isAgentPr({ labels, body: pr?.body ?? null });
   const trust = trustedAuthor(cfg, { author: pr?.user ?? undefined, agentMarked });
-  const verdicts = classifyFiles(files, cfg).map((v): FileVerdict => {
+  const verdicts = classifyFiles(files, cfg, pr?.configPaths).map((v): FileVerdict => {
     const l = llm?.files.get(v.path);
     if (v.autoCandidate) {
       const d = codeAutoDecision(v, { ai: l, findingPaths, rubric: llm?.rubric ?? [], author: pr?.user ?? undefined, agentMarked }, cfg);

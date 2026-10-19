@@ -26,6 +26,8 @@ export interface FileVerdict {
   autoCandidate?: boolean;
   /** lanes.code_auto: this code file is "auto" because the AI explicitly said so (llmReason holds why). Never set by rules alone. */
   codeAuto?: boolean;
+  /** This file (or its previous path) is MergeJudge's own config file. Such a PR never gets bot approval or auto-merge. */
+  configFile?: boolean;
 }
 
 export type LaneSource = "rule" | "LLM" | "rule + LLM" | "rule + rubric" | "LLM + rubric" | "rule + LLM + rubric";

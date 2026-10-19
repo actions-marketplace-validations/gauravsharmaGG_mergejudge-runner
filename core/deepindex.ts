@@ -1,4 +1,7 @@
 import { localImports, resolveImport } from "./context.js";
+import { readInRelevanceOrder, type Seeds, type StopKind } from "./deeporder.js";
+
+export type { SeedFile, Seeds } from "./deeporder.js";
 
 /**
  * Per-repo code index for `review.mode: deep`: symbol table, import graph and code chunks, built with
@@ -35,7 +38,13 @@ export interface IndexSnapshot {
   createdAt: string;
   files: Record<string, FileEntry>;
   /** Set when caps (files, bytes, time) stopped the build early. */
-  partial?: { indexed: number; total: number; reason: string };
+  partial?: {
+    indexed: number; total: number; reason: string;
+    /** Which cap stopped it. */
+    limit?: StopKind;
+    /** Built in relevance order for one PR (see BuildOptions.seeds): biased to that PR, so never store it for reuse by other PRs. */
+    ordered?: boolean;
+  };
   /** True once every chunk has an embedding in the vector store. */
   embedded?: boolean;
 }
@@ -43,6 +52,10 @@ export interface IndexSnapshot {
 export interface IndexSource {
   listPaths(): Promise<string[] | null>;
   readFile(path: string): Promise<string | null>;
+  /** Optional: warm the next `paths` (bulk fetch) just before they are read. */
+  prefetch?(paths: string[]): Promise<void>;
+  /** Optional: paths of files that mention `symbol` (GitHub code search). Used for relevance ordering only; may throw or be rate limited. */
+  searchSymbol?(symbol: string): Promise<string[]>;
 }
 
 export interface IndexLimits {
@@ -150,6 +163,18 @@ export interface BuildResult {
   snapshot: IndexSnapshot | null;
   complete: boolean;
   reason?: string;
+  /** Which cap stopped the build (set together with `reason`). */
+  limit?: StopKind;
+  /** Seeded builds only: indexed files from the related stages (changed files, imports/importers, siblings, parents, name matches). */
+  related?: number;
+  /** Seeded builds only: changed files that exist in the tree and are indexable, and how many of them were indexed. */
+  seedsFound?: number;
+  seedsIndexed?: number;
+}
+
+export interface BuildOptions {
+  /** The PR's changed files. When given, files are read most-related-first (core/deeporder.ts); without it the order is the tree order. */
+  seeds?: Seeds;
 }
 
 async function readMany(
@@ -169,25 +194,61 @@ async function readMany(
   return { texts, stopped };
 }
 
-/** Full build from the default-branch tree, within the caps. */
+/** Tree order: shallow first, then alphabetical. */
+const treeOrder = (a: string, b: string) => a.split("/").length - b.split("/").length || (a < b ? -1 : 1);
+
+/**
+ * Full build from the tree of one commit, within the caps. Without `opts.seeds` files are read in tree order.
+ * With seeds they are read most-related-first, so a capped build still holds what the PR touches (a complete build is the same either way).
+ */
 export async function buildIndex(
   src: IndexSource, meta: { repo: string; sha: string }, lim: IndexLimits = INLINE_LIMITS,
-  now: () => number = Date.now,
+  now: () => number = Date.now, opts: BuildOptions = {},
 ): Promise<BuildResult> {
   const all = await src.listPaths().catch(() => null);
   if (!all) return { snapshot: null, complete: false, reason: "file tree unavailable or truncated" };
-  const cands = all.filter(isIndexable).sort((a, b) => a.split("/").length - b.split("/").length || (a < b ? -1 : 1));
-  const wanted = cands.slice(0, lim.maxFiles);
-  const { texts, stopped } = await readMany(src, wanted, lim, now);
+  const cands = all.filter(isIndexable).sort(treeOrder);
   const files: Record<string, FileEntry> = {};
-  for (const [p, t] of texts) {
-    const e = t === null ? null : indexFile(p, t, lim);
-    if (e) files[p] = e;
+  let reason: string | undefined;
+  let limit: StopKind | undefined;
+  let extra: Pick<BuildResult, "related" | "seedsFound" | "seedsIndexed"> = {};
+  if (opts.seeds) {
+    const r = await readInRelevanceOrder(src, all, cands, opts.seeds, lim, now, isIndexable);
+    for (const p of r.order) {
+      const t = r.texts.get(p);
+      const e = typeof t === "string" ? indexFile(p, t, lim) : null;
+      if (e) files[p] = e;
+    }
+    reason = r.stopped?.reason;
+    limit = r.stopped?.kind;
+    extra = {
+      related: r.order.slice(0, r.relatedEnd).filter((p) => files[p]).length,
+      seedsFound: r.seedPaths.length,
+      seedsIndexed: r.seedPaths.filter((p) => files[p]).length,
+    };
+  } else {
+    const wanted = cands.slice(0, lim.maxFiles);
+    await src.prefetch?.(wanted).catch(() => {});
+    const { texts, stopped } = await readMany(src, wanted, lim, now);
+    for (const [p, t] of texts) {
+      const e = t === null ? null : indexFile(p, t, lim);
+      if (e) files[p] = e;
+    }
+    reason = stopped ?? (cands.length > wanted.length ? `file cap ${lim.maxFiles} reached (${cands.length} indexable files)` : undefined);
+    limit = stopped ? (stopped.startsWith("time") ? "time" : "size") : reason ? "files" : undefined;
   }
   const snapshot: IndexSnapshot = { v: 1, repo: meta.repo, sha: meta.sha, createdAt: new Date(now()).toISOString(), files };
-  const reason = stopped ?? (cands.length > wanted.length ? `file cap ${lim.maxFiles} reached (${cands.length} indexable files)` : undefined);
-  if (reason) snapshot.partial = { indexed: Object.keys(files).length, total: cands.length, reason };
-  return { snapshot, complete: !reason, reason };
+  if (reason) snapshot.partial = { indexed: Object.keys(files).length, total: cands.length, reason, ...(limit ? { limit } : {}), ...(opts.seeds ? { ordered: true } : {}) };
+  return { snapshot, complete: !reason, reason, ...(limit ? { limit } : {}), ...extra };
+}
+
+/** User-facing fragment for a relevance-ordered partial index (null for a complete or tree-order one). */
+export function partialIndexNote(snap: IndexSnapshot): string | null {
+  const p = snap.partial;
+  if (!p?.ordered) return null;
+  const n = Object.keys(snap.files).length;
+  const word = { size: "size", time: "time", files: "file" }[p.limit ?? "size"];
+  return `used a partial index (${n} file${n === 1 ? "" : "s"}, most related first; ${word} limit reached)`;
 }
 
 export interface FileChange { path: string; removed?: boolean }

@@ -276,6 +276,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
         if (!prep.ok) fallback(prep.reason);
         else {
           for (const n of prep.notes) log.info(`deep: ${n}`);
+          if (prep.partial) notes.push(`Deep mode ${prep.partial}.`);
           tools = deepTools({ snap: prep.snap, readFile: (p) => o.deep!.head.readFile(p), skip, semantic: prep.semantic });
         }
       }

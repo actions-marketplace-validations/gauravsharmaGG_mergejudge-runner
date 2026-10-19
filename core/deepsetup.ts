@@ -1,6 +1,6 @@
 import { hitText, type SemanticHit } from "./deep.js";
 import {
-  allChunks, buildIndex, INLINE_LIMITS, updateIndex, type FileChange, type IndexSnapshot, type IndexSource,
+  allChunks, buildIndex, INLINE_LIMITS, partialIndexNote, updateIndex, type BuildResult, type FileChange, type IndexSnapshot, type IndexSource, type Seeds,
 } from "./deepindex.js";
 import type { R2IndexStore } from "./indexstore.js";
 import type { PrFile } from "./types.js";
@@ -35,13 +35,37 @@ export interface DeepEnv {
 }
 
 export type DeepPrep =
-  | { ok: true; snap: IndexSnapshot; semantic?: (q: string, k: number) => Promise<SemanticHit[]>; notes: string[] }
+  | { ok: true; snap: IndexSnapshot; /** Set when a cap stopped the build: "used a partial index (...)" (also in `notes`). */ partial?: string; semantic?: (q: string, k: number) => Promise<SemanticHit[]>; notes: string[] }
   | { ok: false; reason: string };
 
 /** Effective policy: `stored` needs R2; otherwise nothing may be persisted. */
 export const effectivePolicy = (e: Pick<DeepEnv, "policy" | "store">): "stored" | "none" => (e.policy === "stored" && e.store ? "stored" : "none");
 
 const MAX_OVERLAY_FILES = 60;
+const MAX_SEED_FILES = 200;
+
+/**
+ * A temporary build that hit a cap is still used when at least this many files from the related stages
+ * (changed files, their imports/importers, siblings, parent directories, name matches) were indexed.
+ * Below it the review falls back to `context`: a handful of unrelated files adds nothing over it.
+ */
+export const MIN_PARTIAL_RELATED_FILES = 3;
+
+/** Paths as they exist at the base commit: a renamed file's old path is read, and the new path still points at its directory. */
+function seedsFrom(prFiles: PrFile[]): Seeds {
+  return { files: prFiles.slice(0, MAX_SEED_FILES).flatMap((f) => [
+    { path: f.path, patch: f.patch },
+    ...(f.previousPath ? [{ path: f.previousPath, patch: f.patch }] : []),
+  ]) };
+}
+
+/**
+ * Enough related files, and not a PR whose existing changed files all failed to index (too big or minified).
+ * A PR that only adds files has no changed file at base: siblings and parents are enough then.
+ */
+function partialIsUseful(b: BuildResult): boolean {
+  return (b.related ?? 0) >= MIN_PARTIAL_RELATED_FILES && ((b.seedsFound ?? 0) === 0 || (b.seedsIndexed ?? 0) > 0);
+}
 
 /**
  * Get an index for a deep review: stored snapshot (caught up to the PR base and overlaid with the PR head
@@ -55,6 +79,7 @@ export async function prepareDeepIndex(e: DeepEnv, prFiles: PrFile[], log: (m: s
   const queue = () => e.enqueueIndex?.().catch((err: Error) => log(`deep: could not queue index job (${err.message})`));
 
   let snap: IndexSnapshot | null = null;
+  let partial: string | undefined;
   if (policy === "stored") {
     snap = await e.store!.latest(e.installationId, e.repoId).catch((err: Error) => { log(`deep: reading snapshot failed (${err.message})`); return null; });
     if (!snap) await queue();
@@ -71,14 +96,27 @@ export async function prepareDeepIndex(e: DeepEnv, prFiles: PrFile[], log: (m: s
   }
 
   if (!snap) {
-    const built = await buildIndex(e.base, { repo: e.repoName, sha: e.baseSha }, INLINE_LIMITS);
-    if (!built.snapshot || !built.complete) {
+    const built = await buildIndex(e.base, { repo: e.repoName, sha: e.baseSha }, INLINE_LIMITS, Date.now, { seeds: seedsFrom(prFiles) });
+    if (!built.snapshot) {
       return { ok: false, reason: policy === "stored"
         ? `no index yet and the repo is too big for an inline build (${built.reason ?? "unknown"}); index build queued`
         : `repo too big for a temporary index (${built.reason ?? "unknown"})` };
     }
+    if (!built.complete) {
+      const related = built.related ?? 0;
+      if (!partialIsUseful(built)) {
+        const why = `${built.reason ?? "unknown"}; only ${related} related file${related === 1 ? "" : "s"} could be indexed`;
+        return { ok: false, reason: policy === "stored"
+          ? `no index yet and the repo is too big for an inline build (${why}); index build queued`
+          : `repo too big for a temporary index (${why})` };
+      }
+      partial = partialIndexNote(built.snapshot) ?? undefined;
+      if (partial) notes.push(partial);
+      if (policy === "stored") notes.push("stored index build queued");
+    } else {
+      notes.push("temporary index built for this review" + (policy === "stored" ? "; stored index build queued" : "; nothing stored"));
+    }
     snap = built.snapshot;
-    notes.push("temporary index built for this review" + (policy === "stored" ? "; stored index build queued" : "; nothing stored"));
   } else if (snap.partial) {
     notes.push(`index is partial (${snap.partial.indexed}/${snap.partial.total} files)`);
   }
@@ -92,7 +130,7 @@ export async function prepareDeepIndex(e: DeepEnv, prFiles: PrFile[], log: (m: s
   const base = snap;
   snap = (await updateIndex(snap, e.head, changes, e.headSha, INLINE_LIMITS)).snapshot;
 
-  return { ok: true, snap, notes, semantic: e.embedder ? semanticSearch(e, base, snap, changedPaths) : undefined };
+  return { ok: true, snap, notes, ...(partial ? { partial } : {}), semantic: e.embedder ? semanticSearch(e, base, snap, changedPaths) : undefined };
 }
 
 /**

@@ -9,7 +9,7 @@ import { buildIndex } from "../core/deepindex.js";
 import type { RunnerJobPayload } from "../core/protocol.js";
 import { cachePaths, cachePolicyFromEnv, cleanupCache, DEFAULT_CACHE, SnapshotStore, touchRepo, withRepoLock } from "../src/cache.js";
 import { produceResult } from "../src/job.js";
-import { afterLocalJob, GitSource, LocalCodeError, localPrFiles, prepareLocalJob, remoteUrl, resolveLocalCode, splitPatches, type LocalCodeOptions } from "../src/localcode.js";
+import { afterLocalJob, GitSource, LOCAL_INDEX_BOUNDS, LOCAL_LIMITS, LocalCodeError, localPrFiles, prepareLocalJob, remoteUrl, resolveLocalCode, splitPatches, type LocalCodeOptions } from "../src/localcode.js";
 import { runLoop } from "../src/run.js";
 import { captureLog, FakeWorker, makeFakeClaude, tmp, tok, writeCfg } from "./helpers.js";
 
@@ -82,6 +82,55 @@ describe("settings and paths", () => {
     const x = resolveLocalCode({ MERGEJUDGE_CACHE_MAX_GB: "9" }, { cacheMaxGb: 3 }, { cacheMaxGb: 1 });
     expect(x.policy.maxBytes).toBe(1024 ** 3);
     expect(resolveLocalCode({}, { cacheMaxGb: 3, keepSnapshots: 5 }).policy).toMatchObject({ maxBytes: 3 * 1024 ** 3, keepSnapshots: 5 });
+  });
+});
+
+describe("local index limits (runner owner only)", () => {
+  const dflt = { maxFiles: 20_000, maxTotalBytes: 200_000_000, maxMs: 15 * 60_000 };
+  it("defaults", () => {
+    expect(resolveLocalCode({}).limits).toMatchObject(dflt);
+    expect(LOCAL_LIMITS).toMatchObject(dflt);
+  });
+  it("flag > env > config file, with env names and config keys", () => {
+    const env = { MERGEJUDGE_LOCAL_INDEX_MAX_FILES: "5000", MERGEJUDGE_LOCAL_INDEX_MAX_MB: "300", MERGEJUDGE_LOCAL_INDEX_MAX_SECONDS: "60" };
+    expect(resolveLocalCode(env).limits).toMatchObject({ maxFiles: 5000, maxTotalBytes: 300_000_000, maxMs: 60_000 });
+    expect(resolveLocalCode({}, { indexMaxFiles: 7000, indexMaxMb: 50, indexMaxSeconds: 120 }).limits).toMatchObject({ maxFiles: 7000, maxTotalBytes: 50_000_000, maxMs: 120_000 });
+    expect(resolveLocalCode(env, { indexMaxFiles: 7000 }, { indexMaxFiles: 9000 }).limits.maxFiles).toBe(9000);
+    expect(resolveLocalCode(env, { indexMaxFiles: 7000 }).limits.maxFiles).toBe(5000);
+  });
+  it("clamps out-of-range values to the documented bounds", () => {
+    expect(LOCAL_INDEX_BOUNDS).toEqual({ files: [1_000, 100_000], mb: [10, 1_000], seconds: [30, 1_800] });
+    expect(resolveLocalCode({ MERGEJUDGE_LOCAL_INDEX_MAX_FILES: "5", MERGEJUDGE_LOCAL_INDEX_MAX_MB: "1", MERGEJUDGE_LOCAL_INDEX_MAX_SECONDS: "1" }).limits).toMatchObject({ maxFiles: 1_000, maxTotalBytes: 10_000_000, maxMs: 30_000 });
+    expect(resolveLocalCode({ MERGEJUDGE_LOCAL_INDEX_MAX_FILES: "99999999", MERGEJUDGE_LOCAL_INDEX_MAX_MB: "999999", MERGEJUDGE_LOCAL_INDEX_MAX_SECONDS: "999999" }).limits).toMatchObject({ maxFiles: 100_000, maxTotalBytes: 1_000_000_000, maxMs: 1_800_000 });
+    expect(resolveLocalCode({}, { indexMaxFiles: 1e9 }).limits.maxFiles).toBe(100_000);
+  });
+  it("invalid values fall back (to the next layer, then the default)", () => {
+    const bad = { MERGEJUDGE_LOCAL_INDEX_MAX_FILES: "lots", MERGEJUDGE_LOCAL_INDEX_MAX_MB: "-3", MERGEJUDGE_LOCAL_INDEX_MAX_SECONDS: "" };
+    expect(resolveLocalCode(bad).limits).toMatchObject(dflt);
+    expect(resolveLocalCode(bad, { indexMaxFiles: 4000, indexMaxMb: Number.NaN }).limits).toMatchObject({ ...dflt, maxFiles: 4000 });
+    expect(resolveLocalCode({}, {}, { indexMaxFiles: Number.NaN, indexMaxMb: 0 }).limits).toMatchObject(dflt);
+  });
+  it("the reviewed repo's .mergejudge.yml cannot change them", () => {
+    const limits = resolveLocalCode({}).limits;
+    const cfg = parseConfig("runner:\n  code_source: local\nlocal_index_max_files: 99999\nindex_max_files: 99999\nlocalCode:\n  indexMaxFiles: 99999\n");
+    expect(JSON.stringify(cfg)).not.toMatch(/99999/);
+    expect(limits).toMatchObject(dflt); // limits are resolved from the owner's env/flags/config file only; prepareLocalJob takes no repo input for them
+  });
+});
+
+describe("partial local index", () => {
+  it("is built most-related-first, noted, and NOT saved for other pull requests", async () => {
+    o = { ...o, limits: { ...o.limits, maxFiles: 1 } };
+    const data = await prepareLocalJob(o, input(), (m) => logs.push(m));
+    expect(data.notes.join("\n")).toMatch(/Deep mode used a partial index \(1 file, most related first; file limit reached\); not saved for other pull requests\./);
+    expect(data.pieces.map((p) => p.path)).toContain("src/a.ts"); // the changed file made it into the capped index
+    const store = new SnapshotStore(join(home, "idx", "acme__app"));
+    expect(store.get(origin.base0)).toBeNull();
+    expect(store.latestSha()).toBeNull();
+  });
+  it("a complete build is saved as before", async () => {
+    await prepareLocalJob(o, input(), () => {});
+    expect(new SnapshotStore(join(home, "idx", "acme__app")).latestSha()).toBe(origin.base0);
   });
 });
 

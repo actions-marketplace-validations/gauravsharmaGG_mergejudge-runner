@@ -47450,13 +47450,13 @@ function _promise(Class2, innerType) {
 }
 // @__NO_SIDE_EFFECTS__
 function _custom(Class2, fn, _params) {
-  const norm3 = normalizeParams(_params);
-  norm3.abort ?? (norm3.abort = true);
+  const norm4 = normalizeParams(_params);
+  norm4.abort ?? (norm4.abort = true);
   const schema = new Class2({
     type: "custom",
     check: "custom",
     fn,
-    ...norm3
+    ...norm4
   });
   return schema;
 }
@@ -56087,6 +56087,470 @@ async function gatherContext(files, src, opts = {}, log = () => {
   return { pieces, bytes, reads, dropped };
 }
 
+// core/deepretrieve.ts
+var DEEP_RETRIEVE_DEFAULTS = { max_bytes: 8e4, max_files: 60, max_symbols: 8, max_callers: 5, max_file_bytes: 12e3 };
+var DEEP_HOP_DEFAULTS = {
+  max_importers: 6,
+  max_hop2_importers: 6,
+  max_hop2_imports: 4,
+  max_examine: 40,
+  max_literals: 12,
+  max_literal_files: 8,
+  literal_common_files: 25,
+  max_scan_bytes: 8e6,
+  literal_piece_bytes: 6e3,
+  max_ms: 3e3
+};
+function snapshotText(snap, path2) {
+  const f = snap.files[path2];
+  if (!f) return null;
+  const lines = [];
+  for (const c of f.chunks) {
+    const parts = c.text.split("\n");
+    for (let i = 0; i < parts.length; i++) lines[c.start - 1 + i] = parts[i];
+  }
+  for (let i = 0; i < lines.length; i++) lines[i] ??= "";
+  return lines.join("\n");
+}
+function snapshotSource(snap) {
+  return {
+    listPaths: async () => Object.keys(snap.files),
+    readFile: async (p) => snapshotText(snap, p),
+    searchSymbol: async (sym) => [...new Set(findReferences(snap, sym, 80).map((h) => h.path))]
+  };
+}
+var baseName = (p) => p.replace(/\.[^./]+$/, "").split("/").pop();
+var escapeRe = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+var wholeToken = (lit) => new RegExp(`(?<![\\w$])${escapeRe(lit)}(?![\\w$])`);
+var COMMON_LITERALS = /* @__PURE__ */ new Set([
+  "use strict",
+  "utf8",
+  "utf-8",
+  "string",
+  "number",
+  "object",
+  "boolean",
+  "function",
+  "undefined",
+  "default",
+  "error",
+  "data",
+  "json",
+  "true",
+  "false",
+  "null",
+  "none",
+  "type",
+  "name",
+  "value",
+  "values",
+  "test",
+  "index",
+  "main",
+  "node",
+  "content-type",
+  "application/json",
+  "text/plain",
+  "text/html",
+  "GET",
+  "POST",
+  "PUT",
+  "DELETE",
+  "PATCH",
+  "HEAD",
+  "message",
+  "status",
+  "result",
+  "results",
+  "items",
+  "length",
+  "key",
+  "keys",
+  "path",
+  "file",
+  "text",
+  "info",
+  "warn",
+  "debug",
+  "require",
+  "exports",
+  "module",
+  "string",
+  "return",
+  "async",
+  "await",
+  "const",
+  "this",
+  "self",
+  "class"
+]);
+function distinct(t) {
+  let sc = Math.min(t.length, 24) / 4;
+  if (/[._:/-]/.test(t)) sc += 3;
+  if (/[a-z][A-Z]/.test(t) || /^[A-Z0-9_]{4,}$/.test(t)) sc += 2;
+  if (/\d/.test(t)) sc += 1;
+  return sc;
+}
+function patchLiterals(patch, max = DEEP_HOP_DEFAULTS.max_literals) {
+  if (!patch) return [];
+  const seen = /* @__PURE__ */ new Map();
+  const note = (text, kind, removed) => {
+    if (text.length < 3 || text.length > 80 || /\s/.test(text) || COMMON_LITERALS.has(text) || /^[\d._-]+$/.test(text)) return;
+    if (/^[./]|^@[\w-]+\/|^node:/.test(text)) return;
+    const e = seen.get(text) ?? { removed: false, added: false, kind };
+    if (removed) e.removed = true;
+    else e.added = true;
+    if (kind === "env") e.kind = "env";
+    seen.set(text, e);
+  };
+  for (const line of patch.split("\n")) {
+    if (!/^[+-]/.test(line) || /^(\+\+\+|---)/.test(line) || line.length > 600) continue;
+    const removed = line[0] === "-";
+    const l = line.slice(1);
+    if (/^\s*(?:import\b|export\s[^'"]*\sfrom\b|from\s+\S+\s+import\b)|\brequire\s*\(/.test(l)) continue;
+    for (const m of l.matchAll(/process\.env\.([A-Za-z_]\w*)|import\.meta\.env\.([A-Za-z_]\w*)|\benv\.([A-Z_][A-Z0-9_]*)|(?:process\.env|os\.environ|env)\[\s*['"]([A-Za-z_]\w*)['"]\s*\]|os\.(?:getenv|environ\.get)\(\s*['"]([A-Za-z_]\w*)['"]/g))
+      note(m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5], "env", removed);
+    for (const m of l.matchAll(/(["'`])((?:\\.|(?!\1)[^\\$])*?)\1/g)) note(m[2], "string", removed);
+    for (const m of l.matchAll(/(?:^|[{,(])\s*["']?([A-Za-z_$][\w$-]{4,})["']?\s*:(?!:)/g)) note(m[1], "key", removed);
+    for (const m of l.matchAll(/\.([a-z][\w$]*[A-Z][\w$]*)\b/g)) note(m[1], "key", removed);
+  }
+  const out = [...seen].map(([text, e]) => ({ text, kind: e.kind, side: e.removed && e.added ? "both" : e.removed ? "removed" : "added" }));
+  const rank = (x) => (x.side === "removed" ? 4 : x.side === "added" ? 2 : 0) + (x.kind === "env" ? 3 : 0) + distinct(x.text);
+  return out.sort((a, b) => rank(b) - rank(a) || (a.text < b.text ? -1 : 1)).slice(0, max);
+}
+async function retrieveDeepContext(snap, files, opts = {}, log = () => {
+}) {
+  const t0 = Date.now();
+  const { max_importers, max_hop2_importers, max_hop2_imports, max_examine, max_literals, max_literal_files, literal_common_files, max_scan_bytes, literal_piece_bytes, max_ms } = { ...DEEP_HOP_DEFAULTS, ...opts };
+  const o = { ...DEEP_RETRIEVE_DEFAULTS, ...opts };
+  const src = snapshotSource(snap);
+  const g = await gatherContext(files, src, o, log);
+  const pieces = g.pieces.slice();
+  let bytes = g.bytes;
+  const seen = /* @__PURE__ */ new Set([...pieces.map((p) => p.path), ...files.map((f) => f.path)]);
+  const symbols = [...new Set(files.flatMap((f) => changedSymbols(f.patch)))];
+  const timeUp = () => Date.now() - t0 > max_ms;
+  const full = () => o.max_bytes - bytes < 512 || pieces.length >= o.max_files;
+  const stats = { hop1: 0, literal: 0, hop2: 0, scanned: 0, timedOut: false };
+  const addPiece = (path2, text, kind, why, re, cap0 = o.max_file_bytes) => {
+    const cap = Math.min(o.max_bytes - bytes, cap0);
+    const truncated = text.length > cap;
+    const lines = text.split("\n");
+    const hit = re ? lines.flatMap((l, i) => re.test(l) ? [[i + 1, i + 1]] : []) : [];
+    const content = truncated ? excerpt(text, hit.length ? hit : [[1, 40]], cap) : text;
+    pieces.push({ path: path2, kind, why: why + (truncated ? ", excerpt around relevant lines" : ""), content, truncated });
+    bytes += content.length;
+    seen.add(path2);
+    return true;
+  };
+  const symRe = (names) => new RegExp(names.map((n) => escapeRe(n)).join("|"));
+  const rankCandidates = (cands, needles) => {
+    const out = [];
+    const uniq = [...new Set(cands)].filter((c) => !seen.has(c) && !o.skip?.(c) && !isSensitivePath(c)).sort();
+    const re = needles.length ? symRe(needles) : null;
+    for (const c of uniq.slice(0, max_examine)) {
+      if (timeUp()) {
+        stats.timedOut = true;
+        break;
+      }
+      const text = snapshotText(snap, c);
+      if (text !== null) out.push({ path: c, text, rel: re ? re.test(text) : false });
+    }
+    return out.sort((a, b) => Number(b.rel) - Number(a.rel));
+  };
+  const hop1 = g.pieces.filter((x) => x.kind === "caller").map((x) => ({
+    path: x.path,
+    via: files.find((f) => importersOf(snap, f.path).includes(x.path))?.path ?? files[0]?.path ?? "a changed file"
+  }));
+  for (const f of files) {
+    if (f.status === "removed" || full() || timeUp()) continue;
+    const needles = [baseName(f.path), ...symbols];
+    for (const c of rankCandidates(importersOf(snap, f.path), needles)) {
+      if (stats.hop1 >= max_importers || full() || seen.has(c.path)) continue;
+      addPiece(c.path, c.text, "caller", `imports ${f.path}`, symRe(needles));
+      hop1.push({ path: c.path, via: f.path });
+      stats.hop1++;
+    }
+  }
+  if (!full() && !timeUp() && max_literals > 0 && max_literal_files > 0) {
+    const lits = /* @__PURE__ */ new Map();
+    for (const f of files) for (const l of patchLiterals(f.patch, max_literals)) {
+      const e = lits.get(l.text);
+      if (e) {
+        e.from.push(f.path);
+        if (e.side !== l.side) e.side = "both";
+      } else lits.set(l.text, { ...l, from: [f.path] });
+    }
+    const list2 = [...lits.values()].slice(0, max_literals);
+    if (list2.length) {
+      const changed = new Set(files.map((f) => f.path));
+      const res = list2.map((l) => wholeToken(l.text));
+      const hits = list2.map(() => /* @__PURE__ */ new Map());
+      const common = list2.map(() => false);
+      let scanned = 0;
+      scan: for (const [path2, fe] of Object.entries(snap.files)) {
+        if (changed.has(path2) || o.skip?.(path2) || isSensitivePath(path2)) continue;
+        if (timeUp()) {
+          stats.timedOut = true;
+          break;
+        }
+        for (const c of fe.chunks) {
+          scanned += c.text.length;
+          if (scanned > max_scan_bytes) break scan;
+          for (let i = 0; i < list2.length; i++) {
+            if (common[i] || !c.text.includes(list2[i].text) || !res[i].test(c.text)) continue;
+            const m = hits[i];
+            if (!m.has(path2) && m.size >= literal_common_files) {
+              common[i] = true;
+              m.clear();
+              continue;
+            }
+            const lines = m.get(path2) ?? [];
+            c.text.split("\n").forEach((l, j) => {
+              if (l.includes(list2[i].text) && res[i].test(l)) lines.push(c.start + j);
+            });
+            m.set(path2, lines);
+          }
+        }
+      }
+      stats.scanned = scanned;
+      const byFile = /* @__PURE__ */ new Map();
+      list2.forEach((l, i) => {
+        for (const [path2, lines] of hits[i]) {
+          const e = byFile.get(path2) ?? { score: 0, lits: [], lines: [] };
+          e.score += (l.side === "removed" ? 3 : l.side === "both" ? 1 : 2) + distinct(l.text) / 10;
+          e.lits.push(i);
+          e.lines.push(...lines);
+          byFile.set(path2, e);
+        }
+      });
+      const near = new Set(hop1.map((h) => h.path));
+      const ranked = [...byFile].filter(([p]) => !seen.has(p)).sort((a, b) => b[1].score - a[1].score || Number(near.has(b[0])) - Number(near.has(a[0])) || (a[0] < b[0] ? -1 : 1));
+      for (const [path2, e] of ranked) {
+        if (stats.literal >= max_literal_files || full()) break;
+        const text = snapshotText(snap, path2);
+        if (text === null) continue;
+        const names = e.lits.slice(0, 3).map((i) => `${JSON.stringify(list2[i].text)} (${list2[i].side === "removed" ? "removed" : list2[i].side === "added" ? "added" : "changed"} in ${list2[i].from[0]})`);
+        const re = symRe(e.lits.map((i) => list2[i].text));
+        addPiece(path2, text, "caller", `references literal ${names.join(", ")} changed in this PR; may depend on the old or new value`, re, literal_piece_bytes);
+        stats.literal++;
+      }
+    }
+  }
+  if (!full() && !timeUp() && (max_hop2_importers > 0 || max_hop2_imports > 0)) {
+    for (const h of hop1) {
+      if (stats.hop2 >= max_hop2_importers || full()) break;
+      const needles = [baseName(h.path), ...symbols];
+      for (const c of rankCandidates(importersOf(snap, h.path), needles)) {
+        if (stats.hop2 >= max_hop2_importers || full()) break;
+        addPiece(c.path, c.text, "caller", `imports ${h.path}, which imports ${h.via} (2 hops from the changed file)`, symRe(needles));
+        stats.hop2++;
+      }
+    }
+    let imp2 = 0;
+    const pathSet = new Set(Object.keys(snap.files));
+    for (const p of g.pieces.filter((x) => x.kind === "import")) {
+      if (imp2 >= max_hop2_imports || full() || timeUp()) break;
+      const targets = (snap.files[p.path]?.imports ?? []).map((spec) => resolveImport(p.path, spec, pathSet)).filter((t) => !!t);
+      for (const c of rankCandidates(targets, symbols)) {
+        if (imp2 >= max_hop2_imports || full()) break;
+        addPiece(c.path, c.text, "import", `imported by ${p.path}, which a changed file imports (2 hops)`, symbols.length ? symRe(symbols) : null);
+        imp2++;
+        stats.hop2++;
+      }
+    }
+  }
+  log(`deep: ${pieces.length} piece(s), ${bytes} bytes retrieved from the index (hop1 importers ${stats.hop1}, literal refs ${stats.literal}, hop2 ${stats.hop2}, ${stats.scanned} bytes scanned, ${Date.now() - t0} ms${stats.timedOut ? ", time budget hit" : ""})`);
+  return { pieces, bytes };
+}
+
+// core/deeporder.ts
+var SIBLING_PROBE_CAP = 100;
+var PARENT_DIR_CAP = 40;
+var MAX_SEARCH_QUERIES = 4;
+var MAX_SEARCH_RESULTS = 10;
+var SEARCH_TIMEOUT_MS = 4e3;
+var MAX_HEURISTIC_FILES = 30;
+var PREFETCH_SLICE = 500;
+var dirOf = (p) => p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
+var baseOf = (p) => p.split("/").pop().replace(/\.[^.]+$/, "");
+var norm3 = (s) => s.toLowerCase().replace(/[_\-.]/g, "");
+var GENERIC_NAMES = /* @__PURE__ */ new Set(["helpers", "utils", "common", "config", "components", "models", "tests", "const", "constants", "types", "services", "handlers"]);
+var PKG_FILE = /(?:^|\/)(?:__init__\.py|index\.[^/]+)$/;
+function pythonAbsoluteImports(text, paths) {
+  const out = /* @__PURE__ */ new Set();
+  const tryModule = (mod) => {
+    const rel = mod.replace(/\./g, "/");
+    for (const root of ["", "src/"]) for (const c of [`${root}${rel}.py`, `${root}${rel}/__init__.py`]) if (paths.has(c)) out.add(c);
+  };
+  for (const m of text.matchAll(/^[ \t]*from[ \t]+([A-Za-z_][\w.]*)[ \t]+import[ \t]+([^\n#]+)/gm)) {
+    tryModule(m[1]);
+    for (const n of m[2].replace(/[()]/g, "").split(",").map((s) => s.trim().split(/\s+as\s+/)[0]).filter((s) => /^[A-Za-z_]\w*$/.test(s)).slice(0, 20)) tryModule(`${m[1]}.${n}`);
+  }
+  for (const m of text.matchAll(/^[ \t]*import[ \t]+([A-Za-z_][\w., \t]*)/gm)) {
+    for (const mod of m[1].split(",").map((s) => s.trim().split(/\s+as\s+/)[0]).filter((s) => /^[A-Za-z_][\w.]*$/.test(s)).slice(0, 10)) tryModule(mod);
+  }
+  return [...out];
+}
+function importTargets(path2, text, paths) {
+  const out = /* @__PURE__ */ new Set();
+  for (const spec of localImports(path2, text)) {
+    const t = resolveImport(path2, spec, paths);
+    if (t) out.add(t);
+  }
+  if (path2.endsWith(".py")) for (const t of pythonAbsoluteImports(text, paths)) out.add(t);
+  out.delete(path2);
+  return [...out];
+}
+function seedIdentifiers(seeds) {
+  const symbols = [...new Set(seeds.files.flatMap((f) => changedSymbols(f.patch)))];
+  const lits = seeds.files.flatMap((f) => patchLiterals(f.patch, 6));
+  const ident = (t) => /^[A-Za-z_]\w{3,}$/.test(t);
+  const env = [...new Set(lits.filter((l) => l.kind === "env").map((l) => l.text))];
+  const other = [...new Set(lits.filter((l) => l.kind !== "env" && ident(l.text)).map((l) => l.text))];
+  return [.../* @__PURE__ */ new Set([...symbols.slice(0, 2), ...env, ...symbols.slice(2), ...other])].slice(0, 12);
+}
+function heuristicPaths(ids, cands, skip, max = MAX_HEURISTIC_FILES) {
+  const wanted = [...new Set(ids.map(norm3))].filter((n) => n.length >= 4);
+  if (!wanted.length) return [];
+  const exact = [], partial2 = [];
+  for (const p of cands) {
+    if (skip.has(p)) continue;
+    const base = norm3(baseOf(p));
+    const dirs = dirOf(p).split("/").map(norm3);
+    if (wanted.some((w) => base === w)) exact.push(p);
+    else if (wanted.some((w) => base.includes(w) || dirs.some((d) => d.includes(w)) || [base, ...dirs].some((t) => t.length >= 6 && !GENERIC_NAMES.has(t) && w.includes(t)))) partial2.push(p);
+  }
+  return [...exact, ...partial2].slice(0, max);
+}
+var withTimeout = (p, ms) => new Promise((resolve2, reject) => {
+  const t = setTimeout(() => reject(new Error(`search timed out after ${ms} ms`)), ms);
+  p.then((v) => {
+    clearTimeout(t);
+    resolve2(v);
+  }, (e) => {
+    clearTimeout(t);
+    reject(e);
+  });
+});
+async function readInRelevanceOrder(src, all, cands, seeds, lim, now, isIndexable2) {
+  const pathSet = new Set(all);
+  const candSet = new Set(cands);
+  const texts = /* @__PURE__ */ new Map();
+  const order = [];
+  const emitted = /* @__PURE__ */ new Set();
+  const start = now();
+  let bytes = 0, attempted = 0;
+  let stopped;
+  const stop = (kind, reason) => {
+    stopped ??= { kind, reason };
+  };
+  const timeUp = () => now() - start > lim.maxMs;
+  const sizeUp = () => bytes > lim.maxTotalBytes;
+  const read = async (paths) => {
+    const todo = [...new Set(paths)].filter((p) => candSet.has(p) && !texts.has(p));
+    for (let i = 0; i < todo.length && !stopped; ) {
+      if (timeUp()) return stop("time", `time budget ${lim.maxMs} ms reached`);
+      if (sizeUp()) return stop("size", `size budget ${lim.maxTotalBytes} bytes reached`);
+      if (attempted >= lim.maxFiles) return stop("files", `file cap ${lim.maxFiles} reached (${cands.length} indexable files)`);
+      const slice = todo.slice(i, i + Math.min(PREFETCH_SLICE, lim.maxFiles - attempted));
+      await src.prefetch?.(slice).catch(() => {
+      });
+      for (let j = 0; j < slice.length && !stopped; j += lim.concurrency) {
+        if (timeUp()) return stop("time", `time budget ${lim.maxMs} ms reached`);
+        if (sizeUp()) return stop("size", `size budget ${lim.maxTotalBytes} bytes reached`);
+        const batch = slice.slice(j, j + lim.concurrency);
+        const got = await Promise.all(batch.map((p) => src.readFile(p).catch(() => null)));
+        batch.forEach((p, k) => {
+          texts.set(p, got[k] ?? null);
+          bytes += got[k]?.length ?? 0;
+          attempted++;
+        });
+      }
+      i += slice.length;
+    }
+  };
+  const emit = (paths) => {
+    for (const p of paths) if (texts.has(p) && !emitted.has(p)) {
+      emitted.add(p);
+      order.push(p);
+    }
+  };
+  const seedPaths = [...new Set(seeds.files.map((f) => f.path))].filter((p) => candSet.has(p));
+  const seedSet = new Set(seedPaths);
+  await read(seedPaths);
+  emit(seedPaths);
+  const dirs = [...new Set(seeds.files.map((f) => dirOf(f.path)))];
+  const byDir = /* @__PURE__ */ new Map();
+  for (const p of cands) {
+    const d = dirOf(p);
+    const l = byDir.get(d);
+    if (l) l.push(p);
+    else byDir.set(d, [p]);
+  }
+  const siblings = [...new Set(dirs.flatMap((d) => byDir.get(d) ?? []))].filter((p) => !seedSet.has(p));
+  const probe = siblings.slice(0, SIBLING_PROBE_CAP);
+  await read(probe);
+  const importers = probe.filter((p) => {
+    const t = texts.get(p);
+    return typeof t === "string" && importTargets(p, t, pathSet).some((x) => seedSet.has(x));
+  });
+  emit(importers);
+  const imports = [...new Set(seedPaths.flatMap((p) => {
+    const t = texts.get(p);
+    return typeof t === "string" ? importTargets(p, t, pathSet) : [];
+  }))].filter((p) => candSet.has(p));
+  await read(imports);
+  emit(imports);
+  await read(siblings);
+  emit(siblings);
+  const pkgFirst = (a, b) => Number(PKG_FILE.test(b)) - Number(PKG_FILE.test(a));
+  const parents = [];
+  const parentSeen = /* @__PURE__ */ new Set();
+  const maxUp = Math.max(0, ...dirs.map((d) => d ? d.split("/").length : 0));
+  for (let up = 1; up <= maxUp && parents.length < 4e3; up++) {
+    for (const d of dirs) {
+      const parts = d ? d.split("/") : [];
+      if (parts.length < up) continue;
+      const pd = parts.slice(0, parts.length - up).join("/");
+      if (parentSeen.has(pd)) continue;
+      parentSeen.add(pd);
+      parents.push(...(byDir.get(pd) ?? []).slice().sort(pkgFirst).slice(0, PARENT_DIR_CAP));
+    }
+  }
+  await read(parents);
+  emit(parents);
+  if (!stopped) {
+    const ids = seedIdentifiers(seeds);
+    let found = [];
+    let searchOk = !!src.searchSymbol && ids.length > 0;
+    if (src.searchSymbol && ids.length) {
+      for (const q2 of ids.slice(0, MAX_SEARCH_QUERIES)) {
+        const left = lim.maxMs - (now() - start);
+        if (left <= 0) {
+          stop("time", `time budget ${lim.maxMs} ms reached`);
+          break;
+        }
+        try {
+          const hits = await withTimeout(src.searchSymbol(q2), Math.min(SEARCH_TIMEOUT_MS, left));
+          found.push(...hits.filter((h) => pathSet.has(h) && isIndexable2(h)).slice(0, MAX_SEARCH_RESULTS));
+        } catch {
+          searchOk = false;
+          break;
+        }
+      }
+    }
+    if (!stopped && (!searchOk || !found.length)) found = heuristicPaths(ids, cands, new Set(texts.keys()));
+    found = [...new Set(found)];
+    await read(found);
+    emit(found);
+  }
+  const relatedEnd = order.length;
+  await read(cands);
+  emit(cands);
+  return { order, texts, relatedEnd, seedPaths, stopped };
+}
+
 // core/deepindex.ts
 var INLINE_LIMITS = { maxFiles: 300, maxFileBytes: 1e5, maxTotalBytes: 3e6, maxMs: 2e4, chunkLines: 40, maxChunksPerFile: 60, concurrency: 8 };
 var JOB_LIMITS = { maxFiles: 2e3, maxFileBytes: 1e5, maxTotalBytes: 12e6, maxMs: 3e5, chunkLines: 40, maxChunksPerFile: 60, concurrency: 8 };
@@ -56203,21 +56667,51 @@ async function readMany(src, paths, lim, now) {
   }
   return { texts, stopped };
 }
-async function buildIndex(src, meta3, lim = INLINE_LIMITS, now = Date.now) {
+var treeOrder = (a, b) => a.split("/").length - b.split("/").length || (a < b ? -1 : 1);
+async function buildIndex(src, meta3, lim = INLINE_LIMITS, now = Date.now, opts = {}) {
   const all = await src.listPaths().catch(() => null);
   if (!all) return { snapshot: null, complete: false, reason: "file tree unavailable or truncated" };
-  const cands = all.filter(isIndexable).sort((a, b) => a.split("/").length - b.split("/").length || (a < b ? -1 : 1));
-  const wanted = cands.slice(0, lim.maxFiles);
-  const { texts, stopped } = await readMany(src, wanted, lim, now);
+  const cands = all.filter(isIndexable).sort(treeOrder);
   const files = {};
-  for (const [p, t] of texts) {
-    const e = t === null ? null : indexFile(p, t, lim);
-    if (e) files[p] = e;
+  let reason;
+  let limit;
+  let extra = {};
+  if (opts.seeds) {
+    const r = await readInRelevanceOrder(src, all, cands, opts.seeds, lim, now, isIndexable);
+    for (const p of r.order) {
+      const t = r.texts.get(p);
+      const e = typeof t === "string" ? indexFile(p, t, lim) : null;
+      if (e) files[p] = e;
+    }
+    reason = r.stopped?.reason;
+    limit = r.stopped?.kind;
+    extra = {
+      related: r.order.slice(0, r.relatedEnd).filter((p) => files[p]).length,
+      seedsFound: r.seedPaths.length,
+      seedsIndexed: r.seedPaths.filter((p) => files[p]).length
+    };
+  } else {
+    const wanted = cands.slice(0, lim.maxFiles);
+    await src.prefetch?.(wanted).catch(() => {
+    });
+    const { texts, stopped } = await readMany(src, wanted, lim, now);
+    for (const [p, t] of texts) {
+      const e = t === null ? null : indexFile(p, t, lim);
+      if (e) files[p] = e;
+    }
+    reason = stopped ?? (cands.length > wanted.length ? `file cap ${lim.maxFiles} reached (${cands.length} indexable files)` : void 0);
+    limit = stopped ? stopped.startsWith("time") ? "time" : "size" : reason ? "files" : void 0;
   }
   const snapshot = { v: 1, repo: meta3.repo, sha: meta3.sha, createdAt: new Date(now()).toISOString(), files };
-  const reason = stopped ?? (cands.length > wanted.length ? `file cap ${lim.maxFiles} reached (${cands.length} indexable files)` : void 0);
-  if (reason) snapshot.partial = { indexed: Object.keys(files).length, total: cands.length, reason };
-  return { snapshot, complete: !reason, reason };
+  if (reason) snapshot.partial = { indexed: Object.keys(files).length, total: cands.length, reason, ...limit ? { limit } : {}, ...opts.seeds ? { ordered: true } : {} };
+  return { snapshot, complete: !reason, reason, ...limit ? { limit } : {}, ...extra };
+}
+function partialIndexNote(snap) {
+  const p = snap.partial;
+  if (!p?.ordered) return null;
+  const n = Object.keys(snap.files).length;
+  const word = { size: "size", time: "time", files: "file" }[p.limit ?? "size"];
+  return `used a partial index (${n} file${n === 1 ? "" : "s"}, most related first; ${word} limit reached)`;
 }
 async function updateIndex(prev, src, changes, sha, lim = INLINE_LIMITS, now = Date.now) {
   const files = { ...prev.files };
@@ -56271,11 +56765,11 @@ function searchSymbols(snap, query, limit = 20) {
   }
   return scored.sort((a, b) => a.rank - b.rank || (a.s.path < b.s.path ? -1 : 1)).slice(0, limit).map((x) => x.s);
 }
-var escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+var escapeRe2 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 function findReferences(snap, symbol2, limit = 30) {
   const name = symbol2.trim();
   if (!name || name.length > 200) return [];
-  const re = new RegExp(`(?<![\\w$])${escapeRe(name)}(?![\\w$])`);
+  const re = new RegExp(`(?<![\\w$])${escapeRe2(name)}(?![\\w$])`);
   const defs = /* @__PURE__ */ new Map();
   const defFiles = [];
   for (const [p, f] of Object.entries(snap.files)) {
@@ -56931,6 +57425,17 @@ async function embedChunks(snap, embedder, store, ids, max = Infinity) {
 // core/deepsetup.ts
 var effectivePolicy = (e) => e.policy === "stored" && e.store ? "stored" : "none";
 var MAX_OVERLAY_FILES = 60;
+var MAX_SEED_FILES = 200;
+var MIN_PARTIAL_RELATED_FILES = 3;
+function seedsFrom(prFiles) {
+  return { files: prFiles.slice(0, MAX_SEED_FILES).flatMap((f) => [
+    { path: f.path, patch: f.patch },
+    ...f.previousPath ? [{ path: f.previousPath, patch: f.patch }] : []
+  ]) };
+}
+function partialIsUseful(b) {
+  return (b.related ?? 0) >= MIN_PARTIAL_RELATED_FILES && ((b.seedsFound ?? 0) === 0 || (b.seedsIndexed ?? 0) > 0);
+}
 async function prepareDeepIndex(e, prFiles, log = () => {
 }) {
   const policy = effectivePolicy(e);
@@ -56938,6 +57443,7 @@ async function prepareDeepIndex(e, prFiles, log = () => {
   if (e.policy === "stored" && !e.store) log("deep: INDEX_BUCKET not bound; treating index.policy as none");
   const queue = () => e.enqueueIndex?.().catch((err) => log(`deep: could not queue index job (${err.message})`));
   let snap = null;
+  let partial2;
   if (policy === "stored") {
     snap = await e.store.latest(e.installationId, e.repoId).catch((err) => {
       log(`deep: reading snapshot failed (${err.message})`);
@@ -56955,12 +57461,23 @@ async function prepareDeepIndex(e, prFiles, log = () => {
     notes.push(`index caught up ${changes2.length} file(s) to base ${e.baseSha.slice(0, 7)} in memory`);
   }
   if (!snap) {
-    const built = await buildIndex(e.base, { repo: e.repoName, sha: e.baseSha }, INLINE_LIMITS);
-    if (!built.snapshot || !built.complete) {
+    const built = await buildIndex(e.base, { repo: e.repoName, sha: e.baseSha }, INLINE_LIMITS, Date.now, { seeds: seedsFrom(prFiles) });
+    if (!built.snapshot) {
       return { ok: false, reason: policy === "stored" ? `no index yet and the repo is too big for an inline build (${built.reason ?? "unknown"}); index build queued` : `repo too big for a temporary index (${built.reason ?? "unknown"})` };
     }
+    if (!built.complete) {
+      const related = built.related ?? 0;
+      if (!partialIsUseful(built)) {
+        const why = `${built.reason ?? "unknown"}; only ${related} related file${related === 1 ? "" : "s"} could be indexed`;
+        return { ok: false, reason: policy === "stored" ? `no index yet and the repo is too big for an inline build (${why}); index build queued` : `repo too big for a temporary index (${why})` };
+      }
+      partial2 = partialIndexNote(built.snapshot) ?? void 0;
+      if (partial2) notes.push(partial2);
+      if (policy === "stored") notes.push("stored index build queued");
+    } else {
+      notes.push("temporary index built for this review" + (policy === "stored" ? "; stored index build queued" : "; nothing stored"));
+    }
     snap = built.snapshot;
-    notes.push("temporary index built for this review" + (policy === "stored" ? "; stored index build queued" : "; nothing stored"));
   } else if (snap.partial) {
     notes.push(`index is partial (${snap.partial.indexed}/${snap.partial.total} files)`);
   }
@@ -56971,7 +57488,7 @@ async function prepareDeepIndex(e, prFiles, log = () => {
   const changedPaths = new Set(changes.filter((c) => !c.removed).map((c) => c.path));
   const base = snap;
   snap = (await updateIndex(snap, e.head, changes, e.headSha, INLINE_LIMITS)).snapshot;
-  return { ok: true, snap, notes, semantic: e.embedder ? semanticSearch(e, base, snap, changedPaths) : void 0 };
+  return { ok: true, snap, notes, ...partial2 ? { partial: partial2 } : {}, semantic: e.embedder ? semanticSearch(e, base, snap, changedPaths) : void 0 };
 }
 function semanticSearch(e, base, snap, changedPaths) {
   const persisted = e.policy === "stored" && e.store && e.vectors && base.embedded ? e.vectors : void 0;
@@ -57458,6 +57975,7 @@ async function produceReviewResult(o) {
         if (!prep.ok) fallback(prep.reason);
         else {
           for (const n of prep.notes) log.info(`deep: ${n}`);
+          if (prep.partial) notes.push(`Deep mode ${prep.partial}.`);
           tools = deepTools({ snap: prep.snap, readFile: (p) => o.deep.head.readFile(p), skip, semantic: prep.semantic });
         }
       }
@@ -57626,283 +58144,6 @@ async function runReview(o) {
 var import_node_fs = require("node:fs");
 var import_node_path = require("node:path");
 
-// core/deepretrieve.ts
-var DEEP_RETRIEVE_DEFAULTS = { max_bytes: 8e4, max_files: 60, max_symbols: 8, max_callers: 5, max_file_bytes: 12e3 };
-var DEEP_HOP_DEFAULTS = {
-  max_importers: 6,
-  max_hop2_importers: 6,
-  max_hop2_imports: 4,
-  max_examine: 40,
-  max_literals: 12,
-  max_literal_files: 8,
-  literal_common_files: 25,
-  max_scan_bytes: 8e6,
-  literal_piece_bytes: 6e3,
-  max_ms: 3e3
-};
-function snapshotText(snap, path2) {
-  const f = snap.files[path2];
-  if (!f) return null;
-  const lines = [];
-  for (const c of f.chunks) {
-    const parts = c.text.split("\n");
-    for (let i = 0; i < parts.length; i++) lines[c.start - 1 + i] = parts[i];
-  }
-  for (let i = 0; i < lines.length; i++) lines[i] ??= "";
-  return lines.join("\n");
-}
-function snapshotSource(snap) {
-  return {
-    listPaths: async () => Object.keys(snap.files),
-    readFile: async (p) => snapshotText(snap, p),
-    searchSymbol: async (sym) => [...new Set(findReferences(snap, sym, 80).map((h) => h.path))]
-  };
-}
-var baseName = (p) => p.replace(/\.[^./]+$/, "").split("/").pop();
-var escapeRe2 = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-var wholeToken = (lit) => new RegExp(`(?<![\\w$])${escapeRe2(lit)}(?![\\w$])`);
-var COMMON_LITERALS = /* @__PURE__ */ new Set([
-  "use strict",
-  "utf8",
-  "utf-8",
-  "string",
-  "number",
-  "object",
-  "boolean",
-  "function",
-  "undefined",
-  "default",
-  "error",
-  "data",
-  "json",
-  "true",
-  "false",
-  "null",
-  "none",
-  "type",
-  "name",
-  "value",
-  "values",
-  "test",
-  "index",
-  "main",
-  "node",
-  "content-type",
-  "application/json",
-  "text/plain",
-  "text/html",
-  "GET",
-  "POST",
-  "PUT",
-  "DELETE",
-  "PATCH",
-  "HEAD",
-  "message",
-  "status",
-  "result",
-  "results",
-  "items",
-  "length",
-  "key",
-  "keys",
-  "path",
-  "file",
-  "text",
-  "info",
-  "warn",
-  "debug",
-  "require",
-  "exports",
-  "module",
-  "string",
-  "return",
-  "async",
-  "await",
-  "const",
-  "this",
-  "self",
-  "class"
-]);
-function distinct(t) {
-  let sc = Math.min(t.length, 24) / 4;
-  if (/[._:/-]/.test(t)) sc += 3;
-  if (/[a-z][A-Z]/.test(t) || /^[A-Z0-9_]{4,}$/.test(t)) sc += 2;
-  if (/\d/.test(t)) sc += 1;
-  return sc;
-}
-function patchLiterals(patch, max = DEEP_HOP_DEFAULTS.max_literals) {
-  if (!patch) return [];
-  const seen = /* @__PURE__ */ new Map();
-  const note = (text, kind, removed) => {
-    if (text.length < 3 || text.length > 80 || /\s/.test(text) || COMMON_LITERALS.has(text) || /^[\d._-]+$/.test(text)) return;
-    if (/^[./]|^@[\w-]+\/|^node:/.test(text)) return;
-    const e = seen.get(text) ?? { removed: false, added: false, kind };
-    if (removed) e.removed = true;
-    else e.added = true;
-    if (kind === "env") e.kind = "env";
-    seen.set(text, e);
-  };
-  for (const line of patch.split("\n")) {
-    if (!/^[+-]/.test(line) || /^(\+\+\+|---)/.test(line) || line.length > 600) continue;
-    const removed = line[0] === "-";
-    const l = line.slice(1);
-    if (/^\s*(?:import\b|export\s[^'"]*\sfrom\b|from\s+\S+\s+import\b)|\brequire\s*\(/.test(l)) continue;
-    for (const m of l.matchAll(/process\.env\.([A-Za-z_]\w*)|import\.meta\.env\.([A-Za-z_]\w*)|\benv\.([A-Z_][A-Z0-9_]*)|(?:process\.env|os\.environ|env)\[\s*['"]([A-Za-z_]\w*)['"]\s*\]|os\.(?:getenv|environ\.get)\(\s*['"]([A-Za-z_]\w*)['"]/g))
-      note(m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5], "env", removed);
-    for (const m of l.matchAll(/(["'`])((?:\\.|(?!\1)[^\\$])*?)\1/g)) note(m[2], "string", removed);
-    for (const m of l.matchAll(/(?:^|[{,(])\s*["']?([A-Za-z_$][\w$-]{4,})["']?\s*:(?!:)/g)) note(m[1], "key", removed);
-    for (const m of l.matchAll(/\.([a-z][\w$]*[A-Z][\w$]*)\b/g)) note(m[1], "key", removed);
-  }
-  const out = [...seen].map(([text, e]) => ({ text, kind: e.kind, side: e.removed && e.added ? "both" : e.removed ? "removed" : "added" }));
-  const rank = (x) => (x.side === "removed" ? 4 : x.side === "added" ? 2 : 0) + (x.kind === "env" ? 3 : 0) + distinct(x.text);
-  return out.sort((a, b) => rank(b) - rank(a) || (a.text < b.text ? -1 : 1)).slice(0, max);
-}
-async function retrieveDeepContext(snap, files, opts = {}, log = () => {
-}) {
-  const t0 = Date.now();
-  const { max_importers, max_hop2_importers, max_hop2_imports, max_examine, max_literals, max_literal_files, literal_common_files, max_scan_bytes, literal_piece_bytes, max_ms } = { ...DEEP_HOP_DEFAULTS, ...opts };
-  const o = { ...DEEP_RETRIEVE_DEFAULTS, ...opts };
-  const src = snapshotSource(snap);
-  const g = await gatherContext(files, src, o, log);
-  const pieces = g.pieces.slice();
-  let bytes = g.bytes;
-  const seen = /* @__PURE__ */ new Set([...pieces.map((p) => p.path), ...files.map((f) => f.path)]);
-  const symbols = [...new Set(files.flatMap((f) => changedSymbols(f.patch)))];
-  const timeUp = () => Date.now() - t0 > max_ms;
-  const full = () => o.max_bytes - bytes < 512 || pieces.length >= o.max_files;
-  const stats = { hop1: 0, literal: 0, hop2: 0, scanned: 0, timedOut: false };
-  const addPiece = (path2, text, kind, why, re, cap0 = o.max_file_bytes) => {
-    const cap = Math.min(o.max_bytes - bytes, cap0);
-    const truncated = text.length > cap;
-    const lines = text.split("\n");
-    const hit = re ? lines.flatMap((l, i) => re.test(l) ? [[i + 1, i + 1]] : []) : [];
-    const content = truncated ? excerpt(text, hit.length ? hit : [[1, 40]], cap) : text;
-    pieces.push({ path: path2, kind, why: why + (truncated ? ", excerpt around relevant lines" : ""), content, truncated });
-    bytes += content.length;
-    seen.add(path2);
-    return true;
-  };
-  const symRe = (names) => new RegExp(names.map((n) => escapeRe2(n)).join("|"));
-  const rankCandidates = (cands, needles) => {
-    const out = [];
-    const uniq = [...new Set(cands)].filter((c) => !seen.has(c) && !o.skip?.(c) && !isSensitivePath(c)).sort();
-    const re = needles.length ? symRe(needles) : null;
-    for (const c of uniq.slice(0, max_examine)) {
-      if (timeUp()) {
-        stats.timedOut = true;
-        break;
-      }
-      const text = snapshotText(snap, c);
-      if (text !== null) out.push({ path: c, text, rel: re ? re.test(text) : false });
-    }
-    return out.sort((a, b) => Number(b.rel) - Number(a.rel));
-  };
-  const hop1 = g.pieces.filter((x) => x.kind === "caller").map((x) => ({
-    path: x.path,
-    via: files.find((f) => importersOf(snap, f.path).includes(x.path))?.path ?? files[0]?.path ?? "a changed file"
-  }));
-  for (const f of files) {
-    if (f.status === "removed" || full() || timeUp()) continue;
-    const needles = [baseName(f.path), ...symbols];
-    for (const c of rankCandidates(importersOf(snap, f.path), needles)) {
-      if (stats.hop1 >= max_importers || full() || seen.has(c.path)) continue;
-      addPiece(c.path, c.text, "caller", `imports ${f.path}`, symRe(needles));
-      hop1.push({ path: c.path, via: f.path });
-      stats.hop1++;
-    }
-  }
-  if (!full() && !timeUp() && max_literals > 0 && max_literal_files > 0) {
-    const lits = /* @__PURE__ */ new Map();
-    for (const f of files) for (const l of patchLiterals(f.patch, max_literals)) {
-      const e = lits.get(l.text);
-      if (e) {
-        e.from.push(f.path);
-        if (e.side !== l.side) e.side = "both";
-      } else lits.set(l.text, { ...l, from: [f.path] });
-    }
-    const list2 = [...lits.values()].slice(0, max_literals);
-    if (list2.length) {
-      const changed = new Set(files.map((f) => f.path));
-      const res = list2.map((l) => wholeToken(l.text));
-      const hits = list2.map(() => /* @__PURE__ */ new Map());
-      const common = list2.map(() => false);
-      let scanned = 0;
-      scan: for (const [path2, fe] of Object.entries(snap.files)) {
-        if (changed.has(path2) || o.skip?.(path2) || isSensitivePath(path2)) continue;
-        if (timeUp()) {
-          stats.timedOut = true;
-          break;
-        }
-        for (const c of fe.chunks) {
-          scanned += c.text.length;
-          if (scanned > max_scan_bytes) break scan;
-          for (let i = 0; i < list2.length; i++) {
-            if (common[i] || !c.text.includes(list2[i].text) || !res[i].test(c.text)) continue;
-            const m = hits[i];
-            if (!m.has(path2) && m.size >= literal_common_files) {
-              common[i] = true;
-              m.clear();
-              continue;
-            }
-            const lines = m.get(path2) ?? [];
-            c.text.split("\n").forEach((l, j) => {
-              if (l.includes(list2[i].text) && res[i].test(l)) lines.push(c.start + j);
-            });
-            m.set(path2, lines);
-          }
-        }
-      }
-      stats.scanned = scanned;
-      const byFile = /* @__PURE__ */ new Map();
-      list2.forEach((l, i) => {
-        for (const [path2, lines] of hits[i]) {
-          const e = byFile.get(path2) ?? { score: 0, lits: [], lines: [] };
-          e.score += (l.side === "removed" ? 3 : l.side === "both" ? 1 : 2) + distinct(l.text) / 10;
-          e.lits.push(i);
-          e.lines.push(...lines);
-          byFile.set(path2, e);
-        }
-      });
-      const near = new Set(hop1.map((h) => h.path));
-      const ranked = [...byFile].filter(([p]) => !seen.has(p)).sort((a, b) => b[1].score - a[1].score || Number(near.has(b[0])) - Number(near.has(a[0])) || (a[0] < b[0] ? -1 : 1));
-      for (const [path2, e] of ranked) {
-        if (stats.literal >= max_literal_files || full()) break;
-        const text = snapshotText(snap, path2);
-        if (text === null) continue;
-        const names = e.lits.slice(0, 3).map((i) => `${JSON.stringify(list2[i].text)} (${list2[i].side === "removed" ? "removed" : list2[i].side === "added" ? "added" : "changed"} in ${list2[i].from[0]})`);
-        const re = symRe(e.lits.map((i) => list2[i].text));
-        addPiece(path2, text, "caller", `references literal ${names.join(", ")} changed in this PR; may depend on the old or new value`, re, literal_piece_bytes);
-        stats.literal++;
-      }
-    }
-  }
-  if (!full() && !timeUp() && (max_hop2_importers > 0 || max_hop2_imports > 0)) {
-    for (const h of hop1) {
-      if (stats.hop2 >= max_hop2_importers || full()) break;
-      const needles = [baseName(h.path), ...symbols];
-      for (const c of rankCandidates(importersOf(snap, h.path), needles)) {
-        if (stats.hop2 >= max_hop2_importers || full()) break;
-        addPiece(c.path, c.text, "caller", `imports ${h.path}, which imports ${h.via} (2 hops from the changed file)`, symRe(needles));
-        stats.hop2++;
-      }
-    }
-    let imp2 = 0;
-    const pathSet = new Set(Object.keys(snap.files));
-    for (const p of g.pieces.filter((x) => x.kind === "import")) {
-      if (imp2 >= max_hop2_imports || full() || timeUp()) break;
-      const targets = (snap.files[p.path]?.imports ?? []).map((spec) => resolveImport(p.path, spec, pathSet)).filter((t) => !!t);
-      for (const c of rankCandidates(targets, symbols)) {
-        if (imp2 >= max_hop2_imports || full()) break;
-        addPiece(c.path, c.text, "import", `imported by ${p.path}, which a changed file imports (2 hops)`, symbols.length ? symRe(symbols) : null);
-        imp2++;
-        stats.hop2++;
-      }
-    }
-  }
-  log(`deep: ${pieces.length} piece(s), ${bytes} bytes retrieved from the index (hop1 importers ${stats.hop1}, literal refs ${stats.literal}, hop2 ${stats.hop2}, ${stats.scanned} bytes scanned, ${Date.now() - t0} ms${stats.timedOut ? ", time budget hit" : ""})`);
-  return { pieces, bytes };
-}
-
 // src/git.ts
 var import_node_child_process = require("node:child_process");
 var GitError = class extends Error {
@@ -57983,7 +58224,7 @@ var WorkspaceSource = class {
 async function retrieveFromWorkspace(dir, kept, cfg, repoName, log, limits = WORKSPACE_LIMITS) {
   const src = new WorkspaceSource(dir);
   const head = (await runGit(["rev-parse", "HEAD"], { cwd: dir, allowFail: true })).stdout.trim() || "workspace";
-  const built = await buildIndex(src, { repo: repoName, sha: head }, limits).catch((e) => {
+  const built = await buildIndex(src, { repo: repoName, sha: head }, limits, Date.now, { seeds: { files: kept.map((f) => ({ path: f.path, patch: f.patch })) } }).catch((e) => {
     if (e instanceof WorkspaceError) throw e;
     throw new WorkspaceError(`could not list the workspace files: ${e.message}`);
   });
@@ -57991,7 +58232,9 @@ async function retrieveFromWorkspace(dir, kept, cfg, repoName, log, limits = WOR
   const skip = (p) => excludeFromLlm([{ path: p }], cfg.diff_exclude).skipped.length > 0;
   const r = await retrieveDeepContext(built.snapshot, kept, { skip }, log);
   const notes = [`Deep mode from the Actions checkout (${head.slice(0, 7)}): repo context was retrieved from an in-memory index of the checked-out files and reviewed in one pass (no tool calls).`];
-  if (built.snapshot.partial) notes.push(`index is partial (${built.snapshot.partial.indexed}/${built.snapshot.partial.total} files: ${built.snapshot.partial.reason})`);
+  const ordered = partialIndexNote(built.snapshot);
+  if (ordered) notes.push(`Deep mode ${ordered}.`);
+  else if (built.snapshot.partial) notes.push(`index is partial (${built.snapshot.partial.indexed}/${built.snapshot.partial.total} files: ${built.snapshot.partial.reason})`);
   return { pieces: r.pieces, notes };
 }
 

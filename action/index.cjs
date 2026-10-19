@@ -55078,10 +55078,10 @@ async function createCheckRun(ok, r, headSha, agg) {
 }
 async function enableAutoMerge(ok, pullRequestNodeId, method) {
   await ok.graphql(
-    `mutation($id: ID!, $method: PullRequestMergeMethod!) {
-      enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: $method }) { clientMutationId }
+    `mutation($id: ID!, $mergeMethod: PullRequestMergeMethod!) {
+      enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: $mergeMethod }) { clientMutationId }
     }`,
-    { id: pullRequestNodeId, method: method.toUpperCase() }
+    { id: pullRequestNodeId, mergeMethod: method.toUpperCase() }
   );
 }
 async function approvePr(ok, r, pull) {

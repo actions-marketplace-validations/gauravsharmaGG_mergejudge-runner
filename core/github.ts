@@ -68,10 +68,10 @@ export async function enableAutoMerge(
   method: "squash" | "merge" | "rebase",
 ): Promise<void> {
   await ok.graphql(
-    `mutation($id: ID!, $method: PullRequestMergeMethod!) {
-      enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: $method }) { clientMutationId }
+    `mutation($id: ID!, $mergeMethod: PullRequestMergeMethod!) {
+      enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: $mergeMethod }) { clientMutationId }
     }`,
-    { id: pullRequestNodeId, method: method.toUpperCase() },
+    { id: pullRequestNodeId, mergeMethod: method.toUpperCase() },
   );
 }
 

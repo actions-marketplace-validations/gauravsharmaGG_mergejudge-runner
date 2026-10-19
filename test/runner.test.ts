@@ -37,7 +37,7 @@ describe("register", () => {
   it("stores a 0600 config in a 0700 dir (XDG_CONFIG_HOME respected) and sends the enrollment code", async () => {
     const xdg = join(dir, "xdg");
     const out: string[] = [];
-    const code = await main(["register", "--code", ENROLL, "--url", w.url, "--name", "mac"], { env: { XDG_CONFIG_HOME: xdg }, out: (l) => out.push(l) });
+    const code = await main(["register", "--code", ENROLL, "--url", w.url, "--name", "mac"], { env: { XDG_CONFIG_HOME: xdg, PATH: "/usr/bin" }, out: (l) => out.push(l), exec: () => ({ status: 0 }), fileExists: (p) => p === "/usr/bin/claude" });
     expect(code).toBe(0);
     const path = join(xdg, "mergejudge-runner", "config.json");
     expect(path).toBe(defaultConfigPath({ XDG_CONFIG_HOME: xdg }));

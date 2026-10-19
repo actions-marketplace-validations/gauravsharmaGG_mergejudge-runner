@@ -7,7 +7,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { buildIndex, isIndexable, JOB_LIMITS, updateIndex, type FileChange, type IndexLimits, type IndexSnapshot, type IndexSource } from "../core/deepindex.js";
+import { buildIndex, JOB_LIMITS, partialIndexNote, updateIndex, type FileChange, type IndexLimits, type IndexSnapshot, type IndexSource } from "../core/deepindex.js";
 import { retrieveDeepContext } from "../core/deepretrieve.js";
 import type { ContextPiece } from "../core/context.js";
 import { filterPolicyPaths } from "../core/policy.js";
@@ -19,8 +19,18 @@ import { GitError, runGit, scrubUrl, splitPatches } from "./git.js";
 import { scanLocalDiff, type SecretScanResult } from "./secretscan.js";
 
 export const DEFAULT_REMOTE_TEMPLATE = "https://github.com/{owner}/{repo}.git";
-/** No 300-file cap: the index lives on the runner's disk, and a read is one `git cat-file`. */
+/**
+ * Defaults for the local index: no 300-file cap, because the index lives on the runner's disk and a read is one `git cat-file`.
+ * 20,000 files / 200 MB read / 15 minutes covers a large monorepo and keeps a single job from running away; a bigger repo gets a
+ * relevance-ordered partial index (see `buildIndex` seeds) instead of failing.
+ */
 export const LOCAL_LIMITS: IndexLimits = { ...JOB_LIMITS, maxFiles: 20_000, maxTotalBytes: 200_000_000, maxMs: 15 * 60_000 };
+/**
+ * What the runner OWNER may set (env `MERGEJUDGE_LOCAL_INDEX_MAX_FILES` / `_MAX_MB` / `_MAX_SECONDS`, flags `--local-index-max-*`,
+ * config file `localCode.indexMaxFiles` / `indexMaxMb` / `indexMaxSeconds`). Values outside the range are clamped, invalid ones ignored.
+ * The reviewed repository's `.mergejudge.yml` has no say: its content is untrusted on the owner's machine.
+ */
+export const LOCAL_INDEX_BOUNDS = { files: [1_000, 100_000], mb: [10, 1_000], seconds: [30, 1_800] } as const;
 const MAX_PR_FILES = 3000;
 const MAX_PATCH_BYTES = 300_000;
 const MAX_OVERLAY = 1000;
@@ -38,7 +48,28 @@ export interface LocalCodeOptions {
   limits: IndexLimits;
 }
 
-export interface LocalCodeSettings { remoteUrlTemplate?: string | null; cacheMaxGb?: number | null; keepSnapshots?: number | null; maxAgeDays?: number | null }
+export interface LocalCodeSettings {
+  remoteUrlTemplate?: string | null; cacheMaxGb?: number | null; keepSnapshots?: number | null; maxAgeDays?: number | null;
+  indexMaxFiles?: number | null; indexMaxMb?: number | null; indexMaxSeconds?: number | null;
+}
+
+/** First valid number wins (flag > env > file); invalid (not a positive number) is skipped; the result is clamped to [lo, hi]. */
+function boundedSetting(candidates: unknown[], [lo, hi]: readonly [number, number], dflt: number): number {
+  for (const c of candidates) {
+    const n = typeof c === "string" ? (c.trim() === "" ? NaN : Number(c)) : typeof c === "number" ? c : NaN;
+    if (Number.isFinite(n) && n > 0) return Math.min(hi, Math.max(lo, n));
+  }
+  return dflt;
+}
+
+/** LOCAL_LIMITS adjusted by the owner's settings (flag > env > config file > default), always within LOCAL_INDEX_BOUNDS. */
+export function resolveLocalLimits(env: Record<string, string | undefined>, file: LocalCodeSettings = {}, flags: LocalCodeSettings = {}): IndexLimits {
+  const b = LOCAL_INDEX_BOUNDS;
+  const files = boundedSetting([flags.indexMaxFiles, env.MERGEJUDGE_LOCAL_INDEX_MAX_FILES, file.indexMaxFiles], b.files, LOCAL_LIMITS.maxFiles);
+  const mb = boundedSetting([flags.indexMaxMb, env.MERGEJUDGE_LOCAL_INDEX_MAX_MB, file.indexMaxMb], b.mb, LOCAL_LIMITS.maxTotalBytes / 1_000_000);
+  const seconds = boundedSetting([flags.indexMaxSeconds, env.MERGEJUDGE_LOCAL_INDEX_MAX_SECONDS, file.indexMaxSeconds], b.seconds, LOCAL_LIMITS.maxMs / 1000);
+  return { ...LOCAL_LIMITS, maxFiles: Math.floor(files), maxTotalBytes: Math.floor(mb * 1_000_000), maxMs: Math.floor(seconds * 1000) };
+}
 
 /** flag > env > config file > default. */
 export function resolveLocalCode(env: Record<string, string | undefined>, file: LocalCodeSettings = {}, flags: LocalCodeSettings = {}, home?: string): LocalCodeOptions {
@@ -51,7 +82,7 @@ export function resolveLocalCode(env: Record<string, string | undefined>, file: 
     MERGEJUDGE_CACHE_MAX_AGE_DAYS: file.maxAgeDays ? String(file.maxAgeDays) : undefined,
   }, base);
   const policy = cachePolicyFromEnv({ ...env, ...(flags.cacheMaxGb ? { MERGEJUDGE_CACHE_MAX_GB: String(flags.cacheMaxGb) } : {}) }, fromFile);
-  return { paths: cachePaths(env, home), remoteTemplate, env, policy, limits: LOCAL_LIMITS };
+  return { paths: cachePaths(env, home), remoteTemplate, env, policy, limits: resolveLocalLimits(env, file, flags) };
 }
 
 export function remoteUrl(template: string, owner: string, repo: string): string {
@@ -188,11 +219,7 @@ export class GitSource implements IndexSource {
 
   async listPaths(): Promise<string[]> {
     await this.list();
-    const all = [...this.oids.keys()];
-    // Same order buildIndex reads in, so the bulk fetch covers exactly what it will read.
-    const wanted = all.filter(isIndexable).sort((a, b) => a.split("/").length - b.split("/").length || (a < b ? -1 : 1)).slice(0, this.limits.maxFiles);
-    await this.prefetch(wanted);
-    return all;
+    return [...this.oids.keys()]; // buildIndex calls prefetch() for the files it is about to read, in its own order
   }
 
   /** One `git fetch --stdin` for the blobs of `paths` that the partial clone does not have yet (best effort: reads fall back to lazy fetch). */
@@ -311,13 +338,16 @@ export async function prepareLocalJob(o: LocalCodeOptions, j: LocalJobInput, log
           }
         }
         if (!snap) {
-          const built = await buildIndex(base, { repo: `${j.owner}/${j.repo}`, sha: j.baseSha }, o.limits);
+          // Seeded: if a cap stops the build, the files this PR touches come first. A complete build is identical to an unseeded one.
+          const built = await buildIndex(base, { repo: `${j.owner}/${j.repo}`, sha: j.baseSha }, o.limits, Date.now, { seeds: { files: kept.flatMap((f) => [{ path: f.path, patch: f.patch }, ...(f.previousPath ? [{ path: f.previousPath, patch: f.patch }] : [])]) } });
           if (!built.snapshot) throw new LocalCodeError(`could not list the files of ${j.baseSha.slice(0, 7)} in the local clone`);
           snap = built.snapshot;
           notes.push(`index built from scratch (${Object.keys(snap.files).length} file(s))`);
         }
-        if (snap.sha !== j.baseSha || !store.get(j.baseSha)) store.put(snap);
-        if (snap.partial) notes.push(`index is partial (${snap.partial.indexed}/${snap.partial.total} files: ${snap.partial.reason})`);
+        // A relevance-ordered partial index is biased to this PR: use it now, but never keep it for other PRs to reuse.
+        if (!snap.partial?.ordered && (snap.sha !== j.baseSha || !store.get(j.baseSha))) store.put(snap);
+        if (snap.partial?.ordered) notes.push(`Deep mode ${partialIndexNote(snap)}; not saved for other pull requests.`);
+        else if (snap.partial) notes.push(`index is partial (${snap.partial.indexed}/${snap.partial.total} files: ${snap.partial.reason})`);
 
         const changes: FileChange[] = files.slice(0, MAX_OVERLAY).flatMap((f) => [
           ...(f.previousPath ? [{ path: f.previousPath, removed: true }] : []),

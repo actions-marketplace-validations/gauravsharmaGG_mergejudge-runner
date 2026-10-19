@@ -46,7 +46,7 @@ export const CODEX_NOT_CHATGPT_REASON = "Codex is not signed in with ChatGPT (ru
 export function cliWarnings(checks: CliCheck[]): string[] {
   const w: string[] = [];
   const claude = checks.find((c) => c.name === "claude");
-  if (claude && !claude.installed) w.push("Claude Code (`claude`) was not found. Install it from https://code.claude.com, then run `claude` once and sign in with your own subscription.");
+  if (claude && !claude.installed) w.push("Claude Code (`claude`) was not found. Install it (see https://code.claude.com/docs/en/quickstart), then run `claude` once and sign in with your own subscription.");
   else if (claude && !claude.signedIn) w.push("Claude Code is installed but does not look signed in. Run `claude` and sign in with your own subscription (or `claude setup-token`).");
   const codex = checks.find((c) => c.name === "codex");
   if (codex?.installed && codex.apiKeyLogin) w.push(CODEX_API_KEY_REASON + " Codex is not offered; run `codex login`, choose \"Sign in with ChatGPT\", then run setup again.");

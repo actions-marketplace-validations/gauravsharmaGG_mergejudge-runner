@@ -75,7 +75,7 @@ const tilde = (p: string, home: string) => (home && p.startsWith(home + "/") ? `
 
 /** One status line per engine. */
 export function engineLine(r: EngineReport, home: string): string {
-  if (r.engine === "glm") return r.state === "ready" ? "glm: ready (z.ai API key, billed per use)" : "glm: no API key (optional, billed per use)";
+  if (r.engine === "glm") return r.state === "ready" ? "glm: ready (your z.ai API key; z.ai bills you per use)" : "glm: no API key (optional; z.ai bills per use)";
   const where = r.foundAt ? ` (found at ${tilde(r.foundAt, home)}, which is not on PATH)` : "";
   if (r.state === "ready") return `${r.engine}: ready${where}`;
   if (r.state === "not-signed-in") return `${r.engine}: installed, not signed in${where} (${r.reason})`;
@@ -88,7 +88,7 @@ export function engineHint(r: EngineReport): string | null {
   if (r.engine === "glm") return "To add it, pass --glm-key-env NAME (an environment variable holding your z.ai key) or answer y to the GLM question.";
   if (r.engine === "claude-code") {
     return r.state === "not-found"
-      ? "Install Claude Code from https://code.claude.com, then run `claude` once and sign in with your own subscription."
+      ? "Install Claude Code (see https://code.claude.com/docs/en/quickstart), then run `claude` once and sign in with your own subscription."
       : "Run `claude` and sign in with your own subscription (or `claude setup-token`), then run setup again.";
   }
   return r.state === "not-found"

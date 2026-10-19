@@ -59,15 +59,15 @@ describe("engine lines", () => {
     expect(lines[0]).toBe("claude-code: ready");
     expect(lines[1]).toContain("codex: installed, not signed in (Codex is signed in with an API key, but the runner only uses a ChatGPT sign-in");
     expect(lines[2]).toBe("  Run `codex login` and choose \"Sign in with ChatGPT\", then run setup again.");
-    expect(lines[3]).toBe("glm: no API key (optional, billed per use)");
-    expect(engineLine(glmReport(true), "/h")).toBe("glm: ready (z.ai API key, billed per use)");
+    expect(lines[3]).toBe("glm: no API key (optional; z.ai bills per use)");
+    expect(engineLine(glmReport(true), "/h")).toBe("glm: ready (your z.ai API key; z.ai bills you per use)");
     expect(lines.join("\n")).not.toContain("sk-proj");
   });
   it("not-found hints carry the official install and sign-in steps", () => {
     const lines = engineLines(detectClis({ env: { PATH: "/usr/bin" }, home: "/h", exec: fakeExec({}), fileExists: () => false }), "/h");
     expect(lines).toEqual([
       "claude-code: not found",
-      "  Install Claude Code from https://code.claude.com, then run `claude` once and sign in with your own subscription.",
+      "  Install Claude Code (see https://code.claude.com/docs/en/quickstart), then run `claude` once and sign in with your own subscription.",
       "codex: not found",
       "  Install Codex with `npm install -g @openai/codex` (or `brew install --cask codex`, or `curl -fsSL https://chatgpt.com/codex/install.sh | sh`), then run `codex login` and choose \"Sign in with ChatGPT\". After the installer you may need a new terminal.",
     ]);
@@ -110,7 +110,7 @@ describe("setup: every engine is shown", () => {
     expect(r.out).toContain("claude-code: ready");
     expect(r.out).toContain("codex: not found");
     expect(r.out).toContain("npm install -g @openai/codex");
-    expect(r.out).toContain("glm: no API key (optional, billed per use)");
+    expect(r.out).toContain("glm: no API key (optional; z.ai bills per use)");
     expect(r.out).not.toContain("No engine is ready yet");
   });
   it("nothing ready: says so, keeps claude-code as the not-yet-usable default, registration still works", async () => {

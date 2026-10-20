@@ -272,6 +272,7 @@ node dist/cli.js --help
 
 ## Changelog
 
+- **0.5.0**: with `lanes.code_auto`, small test-only changes (test files and test folders that only add or adjust tests) can now go auto; the PR comment shows the AI's short reason for files that need review or are blocked; "Why this lane?" no longer repeats the same reason in a details block.
 - **0.4.9**: the runner finds Codex and Claude Code on its own during setup; deep mode reads the files most related to the pull request first and can review with a partial index on big repositories (new `--local-index-max-*` limits for local code); changes to `.mergejudge.yml` always go to review; fix for turning on GitHub auto-merge with `approval.mode: auto-merge-only`; optional learning from human review comments (`learning.from_comments`, off by default); footer wording about merging.
 - **0.4.8**: `mergejudge-runner login` — sign in with GitHub (device flow) so you can start the runner without the panel enrollment code. Needs Device Flow enabled on the MergeJudge GitHub App.
 

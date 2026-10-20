@@ -26,3 +26,26 @@ describe("comment footer merge note", () => {
       .toContain(" · MergeJudge doesn't merge PRs itself. With approval.mode: auto-merge-only, it asks GitHub to auto-merge auto-lane PRs.</sub>");
   });
 });
+
+describe("AI reason and lane explanation", () => {
+  const file = (o: object) => ({ path: "a.py", lane: "review" as const, reasons: ["code file"], additions: 1, deletions: 0, ...o });
+  const mk = (files: object[], extra: object = {}) =>
+    renderComment({ agg: { ...agg, files, ...extra } as never, mode: "m", tokensEstimate: 0, notes: [] });
+
+  it("shows an escaped, capped AI reason for review files", () => {
+    const md = mk([file({ llmReason: "adds <b>new</b> logic " + "x".repeat(300) })]);
+    expect(md).toContain("code file; AI: adds \\<b\\>new\\</b\\> logic");
+    expect(md).toContain("…");
+    expect(md).not.toContain("x".repeat(210));
+  });
+
+  it("does not repeat a reason already present or show it for auto files", () => {
+    expect(mk([file({ llmReason: "code file" })])).not.toContain("AI:");
+    expect(mk([file({ lane: "auto", llmReason: "typo" })], { lane: "auto" })).not.toContain("AI:");
+  });
+
+  it("omits the details block for one reason and keeps it for several", () => {
+    expect(mk([file({})])).not.toContain("Why this lane? Details");
+    expect(mk([file({}), file({ path: "b.py" })])).toContain("Why this lane? Details");
+  });
+});

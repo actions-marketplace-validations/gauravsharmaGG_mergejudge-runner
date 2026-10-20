@@ -67,7 +67,13 @@ const approvalSchema = z
     bot_approve: { auto: true, review: false, block: false },
   });
 
-export const DEFAULT_PROPOSAL_THRESHOLDS = { min_prs: 3, min_actors: 2, min_path_events: 2 };
+export const DEFAULT_PROPOSAL_THRESHOLDS = { min_prs: 3, min_actors: 2, min_path_events: 2, comment_min_prs: 3, comment_min_actors: 2 };
+
+/**
+ * Default of `learning.from_comments`: learn from review comments that people with write access left on lines MergeJudge did not flag.
+ * Off until the owner switches it on; making it on by default later is this one line.
+ */
+export const DEFAULT_LEARN_FROM_COMMENTS = false;
 
 export const DEFAULT_CODE_AUTO = { enabled: false, paths: [] as string[], max_lines: 30, max_total_lines: 100 };
 const codeAutoSchema = z
@@ -212,6 +218,8 @@ export const configSchema = z.object({
   learning: z
     .object({
       enabled: z.boolean().default(true),
+      /** Also learn from review comments by people with write access on lines MergeJudge did not flag. Needs `enabled`. Hosted App only. */
+      from_comments: z.boolean().default(DEFAULT_LEARN_FROM_COMMENTS),
       propose_after: z.number().int().positive().default(10),
       /** Branch that stores lessons; PRs from this head are always block. */
       branch: z.string().default("mergejudge-learning"),
@@ -228,13 +236,20 @@ export const configSchema = z.object({
           min_actors: z.number().int().min(1).default(DEFAULT_PROPOSAL_THRESHOLDS.min_actors),
           /** "Too lenient" on a path: at least this many reverts or fix-follow-ups of auto PRs touching it. */
           min_path_events: z.number().int().min(2).default(DEFAULT_PROPOSAL_THRESHOLDS.min_path_events),
+          /** Comment-based rubric proposals (`learning.from_comments`): a similar missed point on at least this many different PRs ... */
+          comment_min_prs: z.number().int().min(2).default(DEFAULT_PROPOSAL_THRESHOLDS.comment_min_prs),
+          /** ... raised by at least this many different people. */
+          comment_min_actors: z.number().int().min(1).default(DEFAULT_PROPOSAL_THRESHOLDS.comment_min_actors),
         })
         .default({ edits: true, ...DEFAULT_PROPOSAL_THRESHOLDS }),
     })
-    .default({ enabled: true, propose_after: 10, branch: "mergejudge-learning", exclude_actors: [], proposal: { edits: true, ...DEFAULT_PROPOSAL_THRESHOLDS } }),
+    .default({ enabled: true, from_comments: DEFAULT_LEARN_FROM_COMMENTS, propose_after: 10, branch: "mergejudge-learning", exclude_actors: [], proposal: { edits: true, ...DEFAULT_PROPOSAL_THRESHOLDS } }),
 });
 
 export type Config = z.infer<typeof configSchema>;
+
+/** Comment learning is active only when learning is on AND `learning.from_comments` is set. */
+export const learnsFromComments = (cfg: Pick<Config, "learning">): boolean => cfg.learning.enabled && cfg.learning.from_comments;
 export type ProviderConfig = Config["provider"];
 
 export function parseConfig(text: string | undefined | null): Config {

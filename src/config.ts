@@ -32,7 +32,7 @@ export interface RunnerConfig {
   /** ISO time the access token expires (null if the server did not say). */
   tokenExpiresAt: string | null;
   /** Local code source (deep reviews from this machine's own git clone). Environment variables and `run` flags override these. */
-  localCode?: { remoteUrlTemplate?: string | null; cacheMaxGb?: number | null; keepSnapshots?: number | null; maxAgeDays?: number | null };
+  localCode?: { remoteUrlTemplate?: string | null; cacheMaxGb?: number | null; keepSnapshots?: number | null; maxAgeDays?: number | null; indexMaxFiles?: number | null; indexMaxMb?: number | null; indexMaxSeconds?: number | null };
   /** Path of the claude binary; null = `claude` on PATH. */
   claudeBin: string | null;
   registeredAt: string;

@@ -1,6 +1,6 @@
 {
   "name": "mergejudge-runner",
-  "version": "0.4.8",
+  "version": "0.5.0",
   "license": "MIT",
   "type": "module",
   "description": "Run MergeJudge pull-request reviews on your own machine with your own Claude Code, Codex or GLM login",

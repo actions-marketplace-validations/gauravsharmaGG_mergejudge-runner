@@ -43,17 +43,39 @@ export interface RenderInput {
   fileFindings?: { path: string; message: string }[];
   policyFiles?: { path: string; truncated: boolean }[];
   breakdown?: { system: number; policy: number; rubric: number; diff: number; context?: number; tools?: number; tool_calls?: number; output: number; total: number };
+  /** The repo config's approval settings; the footer mentions auto-merge only when enabled with mode auto-merge-only. */
+  approval?: { enabled?: boolean; mode?: string } | null;
+}
+
+/** The AI's per-file reason, escaped and capped, unless the rule reasons already say it. */
+export function aiReasonNote(f: { reasons: string[]; llmReason?: string }): string {
+  const raw = f.llmReason?.replace(/\s+/g, " ").trim();
+  if (!raw || f.reasons.some((r) => r.includes(raw))) return "";
+  const capped = raw.length > 200 ? raw.slice(0, 199).trimEnd() + "…" : raw;
+  return `AI: ${escapeMd(capped)}`;
 }
 
 export function renderLaneExplanation(agg: Aggregate): string {
   const explanation = explainLane(agg);
+  const head = `Why this lane? ${escapeMd(explanation.summary)}`;
+  // With a single reason the details list repeats the summary line.
+  if (explanation.reasons.length <= 1) return head;
   return [
-    `Why this lane? ${escapeMd(explanation.summary)}`,
+    head,
     "", "<details><summary>Why this lane? Details</summary>", "",
     ...explanation.reasons.slice(0, MAX_LIST_ROWS).map((r) => `- ${r.path ? escapeMd(r.path) + ": " : ""}${escapeMd(r.messages.join("; "))}${r.source ? ` (source: ${escapeMd(r.source)})` : ""}`),
     ...moreNote(MAX_LIST_ROWS, explanation.reasons.length),
     "", "</details>",
   ].join("\n");
+}
+
+/** Footer note. MergeJudge never calls a merge API; approval.mode auto-merge-only only asks GitHub to auto-merge. */
+export const MERGE_NOTE = "MergeJudge doesn't merge PRs itself.";
+export const AUTO_MERGE_NOTE = "With approval.mode: auto-merge-only, it asks GitHub to auto-merge auto-lane PRs.";
+
+/** The footer's merge note: the second sentence only when the repo's config turns on approval with mode auto-merge-only. */
+export function mergeNote(approval?: { enabled?: boolean; mode?: string } | null): string {
+  return approval?.enabled === true && approval.mode === "auto-merge-only" ? `${MERGE_NOTE} ${AUTO_MERGE_NOTE}` : MERGE_NOTE;
 }
 
 export function renderComment(r: RenderInput): string {
@@ -67,8 +89,10 @@ export function renderComment(r: RenderInput): string {
 
   if (flagged.length) {
     out.push("### Files needing human review", "", "| File | Lane | Source | Reason |", "|---|---|---|---|");
-    for (const f of flagged.slice(0, MAX_LIST_ROWS))
-      out.push(`| ${escapeMd(f.path)} | ${EMOJI[f.lane]} ${f.lane} | ${f.source ?? "rule"} | ${escapeMd(f.reasons.join("; ")) || "-"} |`);
+    for (const f of flagged.slice(0, MAX_LIST_ROWS)) {
+      const reason = [escapeMd(f.reasons.join("; ")), aiReasonNote(f)].filter(Boolean).join("; ") || "-";
+      out.push(`| ${escapeMd(f.path)} | ${EMOJI[f.lane]} ${f.lane} | ${f.source ?? "rule"} | ${reason} |`);
+    }
     out.push(...moreNote(MAX_LIST_ROWS, flagged.length), "");
   }
   if (safe.length) {
@@ -120,7 +144,7 @@ export function renderComment(r: RenderInput): string {
       (r.breakdown
         ? ` · tokens system ${r.breakdown.system}/policy ${r.breakdown.policy}/rubric ${r.breakdown.rubric}/diff ${r.breakdown.diff}${r.breakdown.context ? `/context ${r.breakdown.context}` : ""}${r.breakdown.tools ? `/tools ${r.breakdown.tools} (${r.breakdown.tool_calls ?? 0} calls)` : ""}/out ${r.breakdown.output}`
         : "") +
-      ` · MergeJudge never merges PRs itself</sub>`,
+      ` · ${mergeNote(r.approval)}</sub>`,
   );
   return capBody(head, "\n" + tail.join("\n"));
 }

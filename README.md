@@ -22,7 +22,7 @@ Auto means low risk, not a guarantee. Your branch protection and required checks
 
 ## Quick start
 
-1. Add your AI key as a repository secret, for example `MJ_API_KEY` (Settings → Secrets and variables → Actions). Skip this for rules-only.
+1. Add your AI key as a repository secret, for example `AI_API_KEY` (Settings → Secrets and variables → Actions). Skip this for rules-only.
 2. Add `.github/workflows/mergejudge.yml`:
 
 ```yaml
@@ -40,12 +40,16 @@ jobs:
     steps:
       - uses: gauravsharmaGG/mergejudge-runner@v1
         env:
-          MJ_API_KEY: ${{ secrets.MJ_API_KEY }}   # omit for rules-only
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}   # omit for rules-only
         with:
           provider: anthropic          # or openai, zai, openai-compatible, none
           model: your-model-name
-          api_key_env: MJ_API_KEY
+          api_key_env: AI_API_KEY
 ```
+
+`AI_API_KEY` is your own Anthropic, OpenAI or z.ai key, stored as a GitHub secret. MergeJudge doesn't issue keys. Leave it out for free rules-only reviews.
+
+The secret name is up to you: `api_key_env` names the variable to read, so existing setups that use `MJ_API_KEY` keep working unchanged.
 
 3. Open a pull request. MergeJudge posts the lane, a summary and line comments.
 
@@ -109,11 +113,11 @@ jobs:
         env:
           # Bring your own key: store it as a repository secret and name it here.
           # Omit (or set provider: none) for rules-only reviews.
-          MJ_API_KEY: ${{ secrets.MJ_API_KEY }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
         with:
           provider: anthropic          # or openai-compatible, or none for rules-only
           model: your-model-name
-          api_key_env: MJ_API_KEY
+          api_key_env: AI_API_KEY
 ```
 
 No `actions/checkout` step is needed for the default modes (add one for deep mode, below): the Action reads `.mergejudge.yml` from the pull request's base branch through the API, and reads the diff from the API. Without a config file it uses built-in defaults.
@@ -133,8 +137,8 @@ No `actions/checkout` step is needed for the default modes (add one for deep mod
   steps:
     - uses: actions/checkout@v4    # for pull_request this is the merge of head and base
     - uses: gauravsharmaGG/mergejudge-runner@v1
-      env: { MJ_API_KEY: "${{ secrets.MJ_API_KEY }}" }
-      with: { provider: anthropic, model: your-model-name, api_key_env: MJ_API_KEY }
+      env: { AI_API_KEY: "${{ secrets.AI_API_KEY }}" }
+      with: { provider: anthropic, model: your-model-name, api_key_env: AI_API_KEY }
   ```
 
   Permissions: `contents: read` is enough for the checkout (the learning modes need `contents: write`, see above). Use the `pull_request` event. Do **not** use `pull_request_target` with a checkout of the PR head, since that runs untrusted code with secrets. Fork pull requests get a read-only token and no secrets, so there is no key for the AI and the review falls back to rules-only (see below). Set `review.mode: deep` in `.mergejudge.yml` on the base branch.
@@ -283,6 +287,7 @@ node dist/cli.js --help
 
 ## Changelog
 
+- **0.5.2**: docs only: the API key secret is now documented as `AI_API_KEY` (your own provider key); `MJ_API_KEY` still works. No engine changes.
 - **0.5.1**: model calls are bounded: 120 s per attempt, at most 1 retry after a timeout, up to 2 retries for network errors, HTTP 408, 429 and 5xx, 240 s per call (`provider.timeout_ms`, `max_timeout_retries`, `max_retries`, `budget_ms`, `max_delay_ms`, or the `MERGEJUDGE_LLM_*` env vars); deep mode caps each call so the loop ends within `deep.max_seconds` + 240 s; on failure the PR comment says only `AI review unavailable (<class>)`, and provider bodies, model text and git stderr stay out of logs; runner and Action logs share one redaction filter.
 - **0.5.0**: with `lanes.code_auto`, small test-only changes (test files and test folders that only add or adjust tests) can now go auto; the PR comment shows the AI's short reason for files that need review or are blocked; "Why this lane?" no longer repeats the same reason in a details block.
 - **0.4.9**: the runner finds Codex and Claude Code on its own during setup; deep mode reads the files most related to the pull request first and can review with a partial index on big repositories (new `--local-index-max-*` limits for local code); changes to `.mergejudge.yml` always go to review; fix for turning on GitHub auto-merge with `approval.mode: auto-merge-only`; optional learning from human review comments (`learning.from_comments`, off by default); footer wording about merging.

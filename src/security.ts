@@ -4,20 +4,23 @@ import { parse } from "yaml";
 import { criterionSchema, type Criterion } from "../core/rubrics.js";
 import type { Config } from "../core/config.js";
 
-/** Appended to every security question: the shared evidence rule. */
-export const SECURITY_RULES =
-  "Fail only when a changed line clearly introduces the problem and you can quote it; otherwise answer pass, or n/a when the change does not touch this area.";
+/** Prepended to the first criterion's question only; it governs every sec.audit.* criterion. */
+export const SECURITY_RULES = "Security audit rules for every sec.audit.* criterion: fail ONLY for a real trust-boundary break that this diff introduces or exposes, meaning attacker-controlled data crosses a boundary without the check that boundary needs. Style, hardening wishes, theory and anything already behind a check are pass. Copy the exact diff line into evidence.quote (confirmed). If you suspect a break but cannot quote it because it depends on code outside the diff, still fail with an empty quote and say what to validate (needs validation; kept for this pack only). justification = a short title, a colon, then why an attacker can reach it.";
 
 const audit = (id: string, question: string): Criterion =>
-  criterionSchema.parse({ id: `sec.audit.${id}`, question: `${question} ${SECURITY_RULES}`, severity: "high", scoring: "pass_fail", raise_to: "review" });
+  criterionSchema.parse({ id: `sec.audit.${id}`, question, severity: "high", scoring: "pass_fail", raise_to: "review" });
 
-/** Short on purpose: five high-severity criteria, each raising to review on an evidenced failure. */
+/** Five high-severity criteria, each raising to review on a failure. */
 export const SECURITY_CRITERIA: Criterion[] = [
-  audit("injection", "Does untrusted input (request data, URL params, files, env, model output) reach a sink (SQL, shell, eval, file path, template, HTML, deserializer) without validation, escaping or parameterisation?"),
-  audit("authz", "Does the change add or alter an entry point (route, handler, job, webhook) without an authentication and authorization check, or loosen or bypass an existing one (missing ownership or tenant check)?"),
-  audit("secrets-crypto", "Does the change hard-code or log a secret, token or key, send one to an untrusted place, or use weak or home-made crypto (MD5/SHA1 for secrets, ECB, static IVs, Math.random for tokens, disabled TLS verification)?"),
-  audit("callbacks", "Does the change fetch or redirect to a caller-supplied URL (webhooks, callbacks, proxies, redirects) without an allowlist, or accept an inbound callback without verifying its signature (SSRF, open redirect, forged webhook)?"),
-  audit("ai-tools", "Where the change adds or edits agents, tools or prompts: can untrusted text steer a tool call, or can a tool run shell, file, network or database actions without an allowlist, limits or confirmation (prompt injection, excessive agency)?"),
+  audit("injection", SECURITY_RULES + " Injection to sinks: does untrusted input (request, params, headers, webhook or queue payload, file or env content, model output) reach a sink unescaped: SQL or query strings, shell or exec, eval, HTML or templates, file paths, redirects, deserialization?"),
+  audit("authz",
+    "Authorization: does a new or changed route, handler, job or tool act for a caller without checking who they are and that they may use the resource (missing auth, IDOR, a dropped or moved role check, a tenant or owner id taken from the request)?"),
+  audit("secrets-crypto",
+    "Secrets and crypto: does the change log, return, embed or commit a credential, token or key, or use weak or home-made crypto (MD5/SHA-1 for passwords, ECB, static IV or salt, Math.random for tokens, == on secrets, TLS verification off)?"),
+  audit("callbacks",
+    "Webhooks, SSRF and callbacks: does an inbound webhook or callback skip signature, token or origin verification, or does the server fetch a URL, host or redirect target an attacker can choose, without an allowlist (internal addresses, metadata endpoints)?"),
+  audit("ai-tools",
+    "AI and tools, only when the diff touches agents, tools, prompts or model calls (otherwise n/a): can model output or untrusted text gain a capability it should not (shell, file or network access, secrets in prompts, overriding a system prompt) with no check or confirmation?"),
 ];
 
 /** True only when the raw YAML has a real boolean `review.security: true`. Strings ("true", "yes"), numbers and bad YAML do not count. */

@@ -27149,7 +27149,7 @@ var require_public_api = __commonJS({
       }
       return doc;
     }
-    function parse7(src, reviver, options) {
+    function parse8(src, reviver, options) {
       let _reviver = void 0;
       if (typeof reviver === "function") {
         _reviver = reviver;
@@ -27190,7 +27190,7 @@ var require_public_api = __commonJS({
         return value.toString(options);
       return new Document.Document(value, _replacer, options).toString(options);
     }
-    exports2.parse = parse7;
+    exports2.parse = parse8;
     exports2.parseAllDocuments = parseAllDocuments;
     exports2.parseDocument = parseDocument2;
     exports2.stringify = stringify;
@@ -33845,18 +33845,18 @@ var validateAsync = async (schema, value, _ctx) => {
   return result.issues.length === 0;
 };
 var _encode = (_Err) => {
-  const parse7 = _parse(_Err);
+  const parse8 = _parse(_Err);
   const fn = (schema, value, _ctx, _params) => {
     const ctx = _ctx ? { ..._ctx, direction: "backward" } : { direction: "backward" };
-    return parse7(schema, value, ctx, finalizeParams(fn, _params));
+    return parse8(schema, value, ctx, finalizeParams(fn, _params));
   };
   return fn;
 };
 var encode = /* @__PURE__ */ _encode($ZodRealError);
 var _decode = (_Err) => {
-  const parse7 = _parse(_Err);
+  const parse8 = _parse(_Err);
   const fn = (schema, value, _ctx, _params) => {
-    return parse7(schema, value, _ctx, finalizeParams(fn, _params));
+    return parse8(schema, value, _ctx, finalizeParams(fn, _params));
   };
   return fn;
 };
@@ -35351,7 +35351,7 @@ function capSize(inst, size) {
   if (!caps.length)
     return;
   const cap = Math.min(...caps.map((c) => c[0]));
-  const parse7 = inst._zod.parse;
+  const parse8 = inst._zod.parse;
   inst._zod.parse = (payload, ctx) => {
     const n = size(payload.value);
     if (n > cap && !ctx?.skipChecks && ctx?.direction !== "backward") {
@@ -35365,7 +35365,7 @@ function capSize(inst, size) {
         }
       }
     }
-    return parse7(payload, ctx);
+    return parse8(payload, ctx);
   };
 }
 var arraySize = (input2) => Array.isArray(input2) ? input2.length : -1;
@@ -58723,6 +58723,49 @@ function redactedLogs(sink, secrets = []) {
   };
 }
 
+// src/security.ts
+var import_yaml4 = __toESM(require_dist(), 1);
+var SECURITY_RULES = "Security audit rules for every sec.audit.* criterion: fail ONLY for a real trust-boundary break that this diff introduces or exposes, meaning attacker-controlled data crosses a boundary without the check that boundary needs. Style, hardening wishes, theory and anything already behind a check are pass. Copy the exact diff line into evidence.quote (confirmed). If you suspect a break but cannot quote it because it depends on code outside the diff, still fail with an empty quote and say what to validate (needs validation; kept for this pack only). justification = a short title, a colon, then why an attacker can reach it.";
+var audit = (id, question) => criterionSchema.parse({ id: `sec.audit.${id}`, question, severity: "high", scoring: "pass_fail", raise_to: "review" });
+var SECURITY_CRITERIA = [
+  audit("injection", SECURITY_RULES + " Injection to sinks: does untrusted input (request, params, headers, webhook or queue payload, file or env content, model output) reach a sink unescaped: SQL or query strings, shell or exec, eval, HTML or templates, file paths, redirects, deserialization?"),
+  audit(
+    "authz",
+    "Authorization: does a new or changed route, handler, job or tool act for a caller without checking who they are and that they may use the resource (missing auth, IDOR, a dropped or moved role check, a tenant or owner id taken from the request)?"
+  ),
+  audit(
+    "secrets-crypto",
+    "Secrets and crypto: does the change log, return, embed or commit a credential, token or key, or use weak or home-made crypto (MD5/SHA-1 for passwords, ECB, static IV or salt, Math.random for tokens, == on secrets, TLS verification off)?"
+  ),
+  audit(
+    "callbacks",
+    "Webhooks, SSRF and callbacks: does an inbound webhook or callback skip signature, token or origin verification, or does the server fetch a URL, host or redirect target an attacker can choose, without an allowlist (internal addresses, metadata endpoints)?"
+  ),
+  audit(
+    "ai-tools",
+    "AI and tools, only when the diff touches agents, tools, prompts or model calls (otherwise n/a): can model output or untrusted text gain a capability it should not (shell, file or network access, secrets in prompts, overriding a system prompt) with no check or confirmation?"
+  )
+];
+function securityRequested(rawYml) {
+  if (!rawYml || !rawYml.trim()) return false;
+  let doc;
+  try {
+    doc = (0, import_yaml4.parse)(rawYml);
+  } catch {
+    return false;
+  }
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return false;
+  const review = doc.review;
+  if (!review || typeof review !== "object" || Array.isArray(review)) return false;
+  return review.security === true;
+}
+function withSecurityMode(cfg, on) {
+  if (!on) return cfg;
+  const seen = /* @__PURE__ */ new Set();
+  const custom2 = [...SECURITY_CRITERIA, ...cfg.rubrics.custom].filter((c) => !seen.has(c.id) && !!seen.add(c.id));
+  return { ...cfg, rubrics: { ...cfg.rubrics, enabled: true, custom: custom2 } };
+}
+
 // src/workspace.ts
 var import_node_fs = require("node:fs");
 var import_node_path = require("node:path");
@@ -58865,7 +58908,9 @@ async function loadCfg(ok, repo, base) {
   const log = logs();
   const { text, ref: cfgRef } = await fetchBaseConfig(ok, repo, cfgPath, base, log.warning);
   log.info(`Config ${cfgPath} read from base ${cfgRef}.`);
-  const cfg = applyProviderOverrides(parseConfig(text), {
+  const security = securityRequested(text);
+  if (security) log.info("review.security is on: adding the security rubric pack.");
+  const cfg = applyProviderOverrides(withSecurityMode(parseConfig(text), security), {
     type: getInput("provider"),
     base_url: getInput("base_url"),
     model: getInput("model"),

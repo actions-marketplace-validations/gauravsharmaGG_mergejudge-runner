@@ -288,6 +288,7 @@ node dist/cli.js --help
 
 ## Changelog
 
+- **0.6.0**: the Action can run an optional security review: set `review.security: true` under `review:` in `.mergejudge.yml` (off by default) to also score the `sec.audit.*` checks. Includes the 0.5.2 docs changes (API key secret documented as `AI_API_KEY`). Action only; the hosted runner does not read this key.
 - **0.5.2**: docs only: the API key secret is now documented as `AI_API_KEY` (your own provider key); `MJ_API_KEY` still works. No engine changes.
 - **0.5.1**: model calls are bounded: 120 s per attempt, at most 1 retry after a timeout, up to 2 retries for network errors, HTTP 408, 429 and 5xx, 240 s per call (`provider.timeout_ms`, `max_timeout_retries`, `max_retries`, `budget_ms`, `max_delay_ms`, or the `MERGEJUDGE_LLM_*` env vars); deep mode caps each call so the loop ends within `deep.max_seconds` + 240 s; on failure the PR comment says only `AI review unavailable (<class>)`, and provider bodies, model text and git stderr stay out of logs; runner and Action logs share one redaction filter.
 - **0.5.0**: with `lanes.code_auto`, small test-only changes (test files and test folders that only add or adjust tests) can now go auto; the PR comment shows the AI's short reason for files that need review or are blocked; "Why this lane?" no longer repeats the same reason in a details block.

@@ -58725,12 +58725,15 @@ function redactedLogs(sink, secrets = []) {
 
 // src/security.ts
 var import_yaml4 = __toESM(require_dist(), 1);
+var SECURITY_RULES = "Fail only when a changed line clearly introduces the problem and you can quote it; otherwise answer pass, or n/a when the change does not touch this area.";
+var audit = (id, question) => criterionSchema.parse({ id: `sec.audit.${id}`, question: `${question} ${SECURITY_RULES}`, severity: "high", scoring: "pass_fail", raise_to: "review" });
 var SECURITY_CRITERIA = [
-  { id: "secmode.authz", question: "Does the change keep authentication and authorization checks in place (none removed, skipped or loosened, no new unauthenticated route)?", severity: "high", scoring: "pass_fail", raise_to: "review" },
-  { id: "secmode.injection", question: "Is user-controlled input kept out of SQL, shell commands, file paths, templates and URLs (parameterised or validated, no string concatenation)?", severity: "high", scoring: "pass_fail", raise_to: "review" },
-  { id: "secmode.unsafe-defaults", question: "Does the change avoid weakening safeguards (TLS verification off, wildcard CORS, broader CI/workflow permissions, debug or admin switches on)?", severity: "medium", scoring: "pass_fail", raise_to: "review" },
-  { id: "secmode.data-exposure", question: "Does the change avoid logging or returning secrets, tokens or personal data?", severity: "medium", scoring: "pass_fail", raise_to: "review" }
-].map((c) => criterionSchema.parse(c));
+  audit("injection", "Does untrusted input (request data, URL params, files, env, model output) reach a sink (SQL, shell, eval, file path, template, HTML, deserializer) without validation, escaping or parameterisation?"),
+  audit("authz", "Does the change add or alter an entry point (route, handler, job, webhook) without an authentication and authorization check, or loosen or bypass an existing one (missing ownership or tenant check)?"),
+  audit("secrets-crypto", "Does the change hard-code or log a secret, token or key, send one to an untrusted place, or use weak or home-made crypto (MD5/SHA1 for secrets, ECB, static IVs, Math.random for tokens, disabled TLS verification)?"),
+  audit("callbacks", "Does the change fetch or redirect to a caller-supplied URL (webhooks, callbacks, proxies, redirects) without an allowlist, or accept an inbound callback without verifying its signature (SSRF, open redirect, forged webhook)?"),
+  audit("ai-tools", "Where the change adds or edits agents, tools or prompts: can untrusted text steer a tool call, or can a tool run shell, file, network or database actions without an allowlist, limits or confirmation (prompt injection, excessive agency)?")
+];
 function securityRequested(rawYml) {
   if (!rawYml || !rawYml.trim()) return false;
   let doc;
@@ -58746,16 +58749,9 @@ function securityRequested(rawYml) {
 }
 function withSecurityMode(cfg, on) {
   if (!on) return cfg;
-  const have = new Set(cfg.rubrics.custom.map((c) => c.id));
-  return {
-    ...cfg,
-    rubrics: {
-      ...cfg.rubrics,
-      enabled: true,
-      packs: cfg.rubrics.packs.includes("security") ? cfg.rubrics.packs : [...cfg.rubrics.packs, "security"],
-      custom: [...cfg.rubrics.custom, ...SECURITY_CRITERIA.filter((c) => !have.has(c.id))]
-    }
-  };
+  const seen = /* @__PURE__ */ new Set();
+  const custom2 = [...SECURITY_CRITERIA, ...cfg.rubrics.custom].filter((c) => !seen.has(c.id) && !!seen.add(c.id));
+  return { ...cfg, rubrics: { ...cfg.rubrics, enabled: true, custom: custom2 } };
 }
 
 // src/workspace.ts

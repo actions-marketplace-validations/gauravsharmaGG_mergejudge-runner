@@ -7,6 +7,7 @@ import { fetchBaseConfig, type Octokit, type Repo } from "../core/github.js";
 import { runFeedback, runPropose, type FeedbackPayload } from "../core/learnflow.js";
 import { runReview, type ReviewPr } from "../core/review.js";
 import { redact, redactedLogs } from "./redact.js";
+import { securityRequested, withSecurityMode } from "./security.js";
 import { retrieveFromWorkspace, WorkspaceError } from "./workspace.js";
 
 /** Secrets seen this run. Action log lines are redacted with these plus the shared token/header patterns. */
@@ -53,7 +54,9 @@ async function loadCfg(ok: Octokit, repo: Repo, base: { ref?: string; sha?: stri
   const log = logs();
   const { text, ref: cfgRef } = await fetchBaseConfig(ok, repo, cfgPath, base, log.warning);
   log.info(`Config ${cfgPath} read from base ${cfgRef}.`);
-  const cfg = applyProviderOverrides(parseConfig(text), {
+  const security = securityRequested(text);
+  if (security) log.info("review.security is on: adding the security rubric pack.");
+  const cfg = applyProviderOverrides(withSecurityMode(parseConfig(text), security), {
     type: core.getInput("provider"),
     base_url: core.getInput("base_url"),
     model: core.getInput("model"),

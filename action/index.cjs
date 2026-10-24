@@ -27149,7 +27149,7 @@ var require_public_api = __commonJS({
       }
       return doc;
     }
-    function parse7(src, reviver, options) {
+    function parse8(src, reviver, options) {
       let _reviver = void 0;
       if (typeof reviver === "function") {
         _reviver = reviver;
@@ -27190,7 +27190,7 @@ var require_public_api = __commonJS({
         return value.toString(options);
       return new Document.Document(value, _replacer, options).toString(options);
     }
-    exports2.parse = parse7;
+    exports2.parse = parse8;
     exports2.parseAllDocuments = parseAllDocuments;
     exports2.parseDocument = parseDocument2;
     exports2.stringify = stringify;
@@ -33845,18 +33845,18 @@ var validateAsync = async (schema, value, _ctx) => {
   return result.issues.length === 0;
 };
 var _encode = (_Err) => {
-  const parse7 = _parse(_Err);
+  const parse8 = _parse(_Err);
   const fn = (schema, value, _ctx, _params) => {
     const ctx = _ctx ? { ..._ctx, direction: "backward" } : { direction: "backward" };
-    return parse7(schema, value, ctx, finalizeParams(fn, _params));
+    return parse8(schema, value, ctx, finalizeParams(fn, _params));
   };
   return fn;
 };
 var encode = /* @__PURE__ */ _encode($ZodRealError);
 var _decode = (_Err) => {
-  const parse7 = _parse(_Err);
+  const parse8 = _parse(_Err);
   const fn = (schema, value, _ctx, _params) => {
-    return parse7(schema, value, _ctx, finalizeParams(fn, _params));
+    return parse8(schema, value, _ctx, finalizeParams(fn, _params));
   };
   return fn;
 };
@@ -35351,7 +35351,7 @@ function capSize(inst, size) {
   if (!caps.length)
     return;
   const cap = Math.min(...caps.map((c) => c[0]));
-  const parse7 = inst._zod.parse;
+  const parse8 = inst._zod.parse;
   inst._zod.parse = (payload, ctx) => {
     const n = size(payload.value);
     if (n > cap && !ctx?.skipChecks && ctx?.direction !== "backward") {
@@ -35365,7 +35365,7 @@ function capSize(inst, size) {
         }
       }
     }
-    return parse7(payload, ctx);
+    return parse8(payload, ctx);
   };
 }
 var arraySize = (input2) => Array.isArray(input2) ? input2.length : -1;
@@ -58723,6 +58723,41 @@ function redactedLogs(sink, secrets = []) {
   };
 }
 
+// src/security.ts
+var import_yaml4 = __toESM(require_dist(), 1);
+var SECURITY_CRITERIA = [
+  { id: "secmode.authz", question: "Does the change keep authentication and authorization checks in place (none removed, skipped or loosened, no new unauthenticated route)?", severity: "high", scoring: "pass_fail", raise_to: "review" },
+  { id: "secmode.injection", question: "Is user-controlled input kept out of SQL, shell commands, file paths, templates and URLs (parameterised or validated, no string concatenation)?", severity: "high", scoring: "pass_fail", raise_to: "review" },
+  { id: "secmode.unsafe-defaults", question: "Does the change avoid weakening safeguards (TLS verification off, wildcard CORS, broader CI/workflow permissions, debug or admin switches on)?", severity: "medium", scoring: "pass_fail", raise_to: "review" },
+  { id: "secmode.data-exposure", question: "Does the change avoid logging or returning secrets, tokens or personal data?", severity: "medium", scoring: "pass_fail", raise_to: "review" }
+].map((c) => criterionSchema.parse(c));
+function securityRequested(rawYml) {
+  if (!rawYml || !rawYml.trim()) return false;
+  let doc;
+  try {
+    doc = (0, import_yaml4.parse)(rawYml);
+  } catch {
+    return false;
+  }
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return false;
+  const review = doc.review;
+  if (!review || typeof review !== "object" || Array.isArray(review)) return false;
+  return review.security === true;
+}
+function withSecurityMode(cfg, on) {
+  if (!on) return cfg;
+  const have = new Set(cfg.rubrics.custom.map((c) => c.id));
+  return {
+    ...cfg,
+    rubrics: {
+      ...cfg.rubrics,
+      enabled: true,
+      packs: cfg.rubrics.packs.includes("security") ? cfg.rubrics.packs : [...cfg.rubrics.packs, "security"],
+      custom: [...cfg.rubrics.custom, ...SECURITY_CRITERIA.filter((c) => !have.has(c.id))]
+    }
+  };
+}
+
 // src/workspace.ts
 var import_node_fs = require("node:fs");
 var import_node_path = require("node:path");
@@ -58865,7 +58900,9 @@ async function loadCfg(ok, repo, base) {
   const log = logs();
   const { text, ref: cfgRef } = await fetchBaseConfig(ok, repo, cfgPath, base, log.warning);
   log.info(`Config ${cfgPath} read from base ${cfgRef}.`);
-  const cfg = applyProviderOverrides(parseConfig(text), {
+  const security = securityRequested(text);
+  if (security) log.info("review.security is on: adding the security rubric pack.");
+  const cfg = applyProviderOverrides(withSecurityMode(parseConfig(text), security), {
     type: getInput("provider"),
     base_url: getInput("base_url"),
     model: getInput("model"),

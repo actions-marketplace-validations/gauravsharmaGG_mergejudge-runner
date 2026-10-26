@@ -332,7 +332,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
   const body = renderComment({
     agg, mode: llm && provider ? provider.label : "rules-only", tokensEstimate: tokens, notes,
     policyFiles: policies.used, fileFindings: findings.filter((f) => f.line === undefined),
-    breakdown: breakdown ?? undefined, approval: cfg.approval,
+    breakdown: breakdown ?? undefined, approval: cfg.approval, laneMap: cfg.review.lane_map,
   });
   return {
     schemaVersion: 1, kind: "review", prNumber: number, headSha: pr.head.sha, prNodeId: pr.node_id,

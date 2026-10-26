@@ -190,7 +190,7 @@ describe("codex engine", () => {
     expect(w.validations).toEqual([{ ok: true }]);
     expect(r.usage).toMatchObject({ model: "runner:codex · model: gpt-5", engine: "codex", engineModel: "gpt-5", billing: "subscription" });
     expect(r.body).toContain("Mode: runner:codex · model: gpt-5");
-    expect(r.findings).toEqual([{ path: "src/a.ts", line: 1, message: "check this" }]);
+    expect(r.findings).toEqual([{ path: "src/a.ts", line: 1, quote: DIFF_SENTINEL, message: "check this" }]);
   });
   it("a missing last-message file or a crash is nacked, not posted", async () => {
     for (const mode of ["nofile", "exit1"]) {

@@ -102,7 +102,7 @@ describe("run --once: happy path", () => {
     expect(r.usage.model).toBe("runner:claude-code · model: default");
     expect(r.usage).toMatchObject({ engine: "claude-code", engineModel: null, billing: "subscription" });
     expect(r.usage.mode).toBe("diff");
-    expect(r.findings).toEqual([{ path: "src/a.ts", line: 1, message: "check this" }]);
+    expect(r.findings).toEqual([{ path: "src/a.ts", line: 1, quote: DIFF_SENTINEL, message: "check this" }]);
     expect(w.of(/nack/)).toHaveLength(0);
 
     const [rec] = fc.records();

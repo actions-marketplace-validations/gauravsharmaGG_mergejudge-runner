@@ -6,7 +6,7 @@ import { completeWithMeta, type LlmProvider } from "./llm/provider.js";
 import type { ContextPiece } from "./context.js";
 import type { Lane, PrFile } from "./types.js";
 import { classifyFiles } from "./rules.js";
-import { criteriaPrompt, evaluateRubric, rubricOutputSchema, type Criterion, type RubricResult } from "./rubrics.js";
+import { criteriaPrompt, evaluateRubric, quoteInPatch, rubricOutputSchema, type Criterion, type RubricResult } from "./rubrics.js";
 
 export const DELIM = "untrusted_pr_data";
 
@@ -17,8 +17,8 @@ Classify each changed file into a lane:
 - "review": a human should look (logic changes, config, dependencies, anything unclear)
 - "block": must not merge (leaked secrets, malicious or clearly dangerous code)
 Respond with ONLY strict JSON, no prose, no code fences, matching exactly:
-{"summary": "<1-3 sentence neutral summary of the PR>", "files": [{"path": "<exact path from the input>", "lane": "auto|review|block", "reason": "<short reason>", "findings": [{"line": <new-file line number>, "message": "<short concrete issue>"}]}]}
-Diff lines are prefixed with their new-file line number like "L12 +code". Add findings only for specific risky or wrong lines (max 5 per file); use [] when none.
+{"summary": "<1-3 sentence neutral summary of the PR>", "files": [{"path": "<exact path from the input>", "lane": "auto|review|block", "reason": "<short reason>", "findings": [{"line": <new-file line number>, "quote": "<the exact diff line, copied verbatim without the L<n> prefix>", "message": "<short concrete issue>"}]}]}
+Diff lines are prefixed with their new-file line number like "L12 +code". Add findings only for specific risky or wrong lines (max 5 per file); use [] when none. For a line finding, copy the exact diff line into "quote"; without a quote that appears verbatim in that file's diff the finding will not be posted inline.
 Only use paths that appear in the input.`;
 
 export const CODE_AUTO_MARK = "[code_auto candidate]";
@@ -171,7 +171,7 @@ const laneEnum = z.enum(["auto", "review", "block"]);
 export const triageOutputSchema = z.object({
   summary: z.string(),
   files: z.array(z.object({ path: z.string(), lane: laneEnum, reason: z.string().default(""),
-    findings: z.array(z.object({ line: z.coerce.number().int(), message: z.string() })).max(50).default([]),
+    findings: z.array(z.object({ line: z.coerce.number().int(), quote: z.string().optional(), message: z.string() })).max(50).default([]),
   })),
   rubric: rubricOutputSchema,
 });
@@ -251,6 +251,8 @@ export interface Finding {
   path: string;
   /** Line on the new side of the diff, or undefined when not inside a hunk (file-level). */
   line?: number;
+  /** Diff line the finding rests on; present only when it verified (otherwise `line` is dropped). */
+  quote?: string;
   message: string;
 }
 
@@ -276,11 +278,13 @@ export function validateAgainstFiles(out: TriageOutput, files: PrFile[], criteri
     for (const x of f.findings) {
       const message = x.message.trim().slice(0, 300);
       if (!message) continue;
-      const line = valid.has(x.line) ? x.line : undefined;
+      // Quiet default: a line stays inline-eligible only when its quote verifies against this file's patch.
+      const quote = x.quote?.trim().slice(0, 200);
+      const line = valid.has(x.line) && quote && quoteInPatch(quote, pf.patch) ? x.line : undefined;
       const key = `${f.path}:${line ?? "file"}:${message}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      findings.push({ path: f.path, ...(line !== undefined ? { line } : {}), message });
+      findings.push({ path: f.path, ...(line !== undefined ? { line, quote } : {}), message });
     }
   }
   return { summary: out.summary.slice(0, 600), files: map, findings: findings.slice(0, MAX_FINDINGS),

@@ -148,8 +148,10 @@ export const configSchema = z.object({
     .object({
       /** diff = changed hunks only (default). context = + full changed files, their imports and callers. deep = + read-only repo tools backed by an index. */
       mode: z.enum(["diff", "context", "deep"]).default("diff"),
+      /** Opt-in test build: the sticky also shows a lane-choice map (mermaid + buckets + per-file lanes). Explanatory only. */
+      lane_map: z.boolean().default(false),
     })
-    .default({ mode: "diff" }),
+    .default({ mode: "diff", lane_map: false }),
   context: z
     .object({
       max_bytes: z.number().int().positive().default(40_000),

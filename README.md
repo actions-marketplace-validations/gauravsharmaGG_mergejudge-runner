@@ -286,6 +286,12 @@ node dist/cli.js --help
 
 `src/` is the runner (plus `src/action.ts`, the GitHub Action entry point); `core/` is the shared review code (rules, prompts, parsing, result format) vendored from the MergeJudge core, so the prompt, JSON parsing and result format are identical to the service. `core/` is synced by maintainers; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Quiet by default, and requiring the check
+
+AI line comments are posted inline only when the finding includes a quote of the diff line that verifies against the PR diff. Findings without a verifiable quote are not posted inline; they are listed in the summary comment under "❔ Needs human", with a count. No config is needed.
+
+The summary also explains the `mergejudge/lane` check: `review` is advisory (the check concludes `neutral`), and only `block` fails it. To make `block` stop merges, require the check `mergejudge/lane` in branch protection or rulesets.
+
 ## Changelog
 
 - **0.6.0**: the Action can run an optional security review: set `review.security: true` under `review:` in `.mergejudge.yml` (off by default) to also score the `sec.audit.*` checks. Includes the 0.5.2 docs changes (API key secret documented as `AI_API_KEY`). Action only; the hosted runner does not read this key.

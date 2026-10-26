@@ -78,6 +78,15 @@ export function mergeNote(approval?: { enabled?: boolean; mode?: string } | null
   return approval?.enabled === true && approval.mode === "auto-merge-only" ? `${MERGE_NOTE} ${AUTO_MERGE_NOTE}` : MERGE_NOTE;
 }
 
+/** Compact coaching lines: what the lanes mean for the `mergejudge/lane` check, and how to make `block` stop merges. */
+export function renderLaneCoach(unverified = 0): string[] {
+  return [
+    `> \`review\` is advisory: the \`${CHECK_NAME}\` check concludes \`neutral\`; only \`block\` fails it.`,
+    `> To make \`block\` stop merges, require the check \`${CHECK_NAME}\` in branch protection or rulesets.`,
+    ...(unverified ? [`> ${unverified} finding${unverified === 1 ? "" : "s"} below need${unverified === 1 ? "s" : ""} human validation (no verified diff quote).`] : []),
+  ];
+}
+
 export function renderComment(r: RenderInput): string {
   const { agg } = r;
   const flagged = agg.files.filter((f) => f.lane !== "auto");
@@ -86,6 +95,7 @@ export function renderComment(r: RenderInput): string {
   out.push(renderLaneExplanation(agg), "", escapeMd(agg.summary), "");
   out.push(`**Overall lane:** ${EMOJI[agg.lane]} \`${agg.lane}\``, "");
   if (agg.labelReasons.length) out.push(...agg.labelReasons.map((l) => `- 🏷️ ${l}`), "");
+  out.push(...renderLaneCoach(r.fileFindings?.length ?? 0), "");
 
   if (flagged.length) {
     out.push("### Files needing human review", "", "| File | Lane | Source | Reason |", "|---|---|---|---|");
@@ -129,7 +139,8 @@ export function renderComment(r: RenderInput): string {
     out.push(...moreNote(MAX_LIST_ROWS, agg.rubric.length), "", "</details>", "");
   }
   if (r.fileFindings?.length) {
-    out.push("### Other LLM findings", "");
+    const n = r.fileFindings.length;
+    out.push(`### ❔ Needs human (${n})`, "", `${n} finding${n === 1 ? " needs" : "s need"} human validation (no verified diff quote), so ${n === 1 ? "it was" : "they were"} not posted as line comments.`, "");
     for (const f of r.fileFindings.slice(0, MAX_LIST_ROWS)) out.push(`- ${escapeMd(f.path)}: ${escapeMd(f.message)}`);
     out.push(...moreNote(MAX_LIST_ROWS, r.fileFindings.length), "");
   }

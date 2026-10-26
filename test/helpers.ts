@@ -110,7 +110,7 @@ export function pollJob(payload: RunnerJobPayload = makePayload(), id = "job1", 
 // ---------------- fake claude ----------------
 export const TRIAGE_REPLY = JSON.stringify({
   summary: "Changes a",
-  files: [{ path: "src/a.ts", lane: "review", reason: "logic", findings: [{ line: 1, message: "check this" }] }],
+  files: [{ path: "src/a.ts", lane: "review", reason: "logic", findings: [{ line: 1, quote: DIFF_SENTINEL, message: "check this" }] }],
 });
 
 export function makeFakeClaude() {

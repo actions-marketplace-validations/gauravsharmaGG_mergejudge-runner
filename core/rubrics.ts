@@ -119,6 +119,12 @@ export interface RubricResult {
 
 const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
 
+/** True when `quote` (L<n> prefix and leading +/- stripped, whitespace-normalised, >= 4 chars) appears in the patch. */
+export function quoteInPatch(quote: string, patch: string | undefined): boolean {
+  const q = norm(quote).replace(/^l\d+ /, "").replace(/^[+-]\s*/, "");
+  return q.length >= 4 && norm(patch ?? "").includes(q);
+}
+
 /**
  * Validate LLM rubric output against known criteria and the diff:
  * a fail only counts (and can raise the lane) if its evidence quote appears in that file's patch.
@@ -126,7 +132,7 @@ const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
  */
 export function evaluateRubric(raw: RubricRaw, criteria: Criterion[], files: PrFile[]): RubricResult[] {
   const byId = new Map(criteria.map((c) => [c.id, c]));
-  const patches = new Map(files.map((f) => [f.path, norm(f.patch ?? "")]));
+  const patches = new Map(files.map((f) => [f.path, f.patch ?? ""]));
   const out: RubricResult[] = [];
   const seen = new Set<string>();
   for (const r of raw) {
@@ -145,8 +151,7 @@ export function evaluateRubric(raw: RubricRaw, criteria: Criterion[], files: PrF
       : undefined;
     if (verdict === "fail") {
       const p = ev ? patches.get(ev.path) : undefined;
-      const q = ev ? norm(ev.quote).replace(/^[+-]\s*/, "") : "";
-      if (!p || q.length < 4 || !p.includes(q)) verdict = "unverified";
+      if (!ev || p === undefined || !quoteInPatch(ev.quote, p)) verdict = "unverified";
     }
     out.push({
       id: c.id,

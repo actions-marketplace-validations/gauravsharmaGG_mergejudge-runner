@@ -303,6 +303,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
     const res = mode === "deep" && tools && canUseTools(provider)
       ? await runDeepTriage(provider, prompt, cfg, tctx, { tools }, log.info, log.warning)
       : await runTriage(provider, prompt, cfg, tctx, log.info, log.warning);
+    if (res.deep?.stopped) notes.push(`AI tool budget exhausted (${res.deep.stopped}); further exploration was not checked.`);
     usedMode = retrievedDeep ? "deep" : mode;
     tokens = res.tokensEstimate;
     llm = res.llm;
@@ -318,6 +319,10 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
     }
   }
 
+  const excluded = excludeFromLlm(files, cfg.diff_exclude).skipped;
+  for (const path of excluded) notes.push(`Diff excluded from AI review: ${path}`);
+  for (const f of files) if (!f.patch) notes.push(`Diff unavailable: ${f.path}`);
+  for (const path of policies.skipped) notes.push(`Policy file missing or empty: ${path}`);
   const agg = aggregate(files, labels, cfg, llm, { body: pr.body ?? null, user: pr.user ?? null, configPaths: o.configPaths });
   // Known false alarms: hide or fold repeats of patterns reviewers keep dismissing. Lanes, labels and rubric stay as aggregated.
   let findings = llm?.findings ?? [];

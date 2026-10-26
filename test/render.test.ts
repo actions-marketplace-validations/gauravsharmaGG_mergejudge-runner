@@ -49,3 +49,46 @@ describe("AI reason and lane explanation", () => {
     expect(mk([file({}), file({ path: "b.py" })])).toContain("Why this lane? Details");
   });
 });
+
+describe("sticky report order", () => {
+  for (const count of [1, 18]) for (const laneMap of [false, true]) {
+    it(`orders ${count} files with lane map ${laneMap}`, () => {
+      const files = Array.from({ length: count }, (_, i) => ({
+        path: `src/${i}.ts`, lane: "review" as const, reasons: [`review-file-${i}`], additions: 1, deletions: 0,
+      }));
+      const input = {
+        ...agg, lane: "block" as const, files,
+        rubric: [
+          { id: "info", verdict: "fail" as const, severity: "low" as const, justification: "informational-result" },
+          { id: "blocker", verdict: "fail" as const, severity: "high" as const, raiseTo: "block" as const, justification: "block-result" },
+        ],
+      };
+      const before = JSON.stringify(input);
+      const body = renderComment({ agg: input, mode: "m", tokensEstimate: 0, laneMap,
+        notes: ["AI tool budget exhausted (tokens)", "Diff excluded from AI review: vendor.js", "Known false alarms: 2 findings hidden"],
+        fileFindings: [{ path: "src/0.ts", message: "unverified-result" }],
+      });
+      const sections = ["**Overall lane:**", "Why this lane?", "### Findings", "#### Block", "#### Review", "#### Informational",
+        ...(laneMap ? ["### 🗺️ Lane choice map"] : []), "### Coverage gaps", "unverified-result", "AI tool budget exhausted"];
+      for (let i = 1; i < sections.length; i++) {
+        expect(body.indexOf(sections[i]!)).toBeGreaterThan(body.indexOf(sections[i - 1]!));
+      }
+      const findings = body.split("### Findings")[1]!;
+      expect(findings.indexOf("block-result")).toBeLessThan(findings.indexOf("review-file-0"));
+      expect(findings.indexOf("review-file-0")).toBeLessThan(findings.indexOf("informational-result"));
+      expect(body.match(/\*\*Overall lane:\*\*/g)).toHaveLength(1);
+      expect(body).toContain("Diff excluded from AI review: vendor.js");
+      expect(body).toContain("2 findings hidden");
+      expect(JSON.stringify(input)).toBe(before);
+    });
+  }
+
+  it("retains coverage when a large report is capped", () => {
+    const body = renderComment({ agg: { ...agg, summary: "x".repeat(70_000) }, mode: "rules-only", tokensEstimate: 0,
+      notes: ["AI budget exhausted"], fileFindings: [{ path: "a.ts", message: "unverified" }] });
+    expect(body.length).toBeLessThanOrEqual(60_000);
+    expect(body).toContain("### Coverage gaps");
+    expect(body).toContain("AI budget exhausted");
+    expect(body).toContain("AI review was not performed");
+  });
+});

@@ -99,24 +99,28 @@ export function renderComment(r: RenderInput): string {
   const flagged = agg.files.filter((f) => f.lane !== "auto");
   const safe = agg.files.filter((f) => f.lane === "auto");
   const out: string[] = [MARKER, "## ⚖️ MergeJudge", ""];
+  out.push(`**Overall lane:** ${EMOJI[agg.lane]} \`${agg.lane}\``, "", renderLaneExplanation(agg), "");
+  out.push("### Findings", "");
+  // Rank across sources, before capping: a rubric blocker must precede a file review.
+  const findings: { lane: Lane; text: string }[] = [
+    ...flagged.map((f) => ({ lane: f.lane, text: `${escapeMd(f.path)} (${f.source ?? "rule"}): ${[escapeMd(f.reasons.join("; ")), aiReasonNote(f)].filter(Boolean).join("; ") || "-"}` })),
+    ...agg.labelReasons.map((reason) => ({ lane: agg.lane, text: `🏷️ ${escapeMd(reason)}` })),
+    ...(agg.rubric ?? []).filter((x) => x.verdict === "fail" || x.verdict === "unverified").map((x) => ({
+      lane: x.raiseTo ?? "auto",
+      text: `${x.verdict === "unverified" ? "❔ " : "❌ "}\`${escapeMd(x.id)}\` ${x.severity}${x.score !== undefined ? ` ${x.score}/5` : ""}${x.evidence ? ` (${escapeMd(x.evidence.path)}${x.evidence.line ? ":" + x.evidence.line : ""})` : ""}: ${escapeMd(x.justification)}${x.raiseTo ? ` → raised to ${x.raiseTo}` : ""}`,
+    })),
+  ];
+  for (const lane of ["block", "review", "auto"] as const) {
+    const group = findings.filter((f) => f.lane === lane);
+    if (!group.length) continue;
+    out.push(`#### ${lane === "auto" ? "Informational" : lane === "block" ? "Block" : "Review"}`, "",
+      ...group.slice(0, MAX_LIST_ROWS).map((f) => `- ${f.text}`), ...moreNote(MAX_LIST_ROWS, group.length), "");
+  }
+  if (!findings.length) out.push("No lane-raising findings.", "");
   if (r.laneMap === true) {
-    out.push(...renderLaneMap(agg, { emoji: EMOJI, escape: escapeMd, maxRows: MAX_LIST_ROWS, more: moreNote, checkName: CHECK_NAME, reason: (f) => [escapeMd(f.reasons.join("; ")), aiReasonNote(f)].filter(Boolean).join("; ") }, { imageUrl: r.laneMapImageUrl, panelUrl: r.panelUrl }));
-    out.push(escapeMd(agg.summary), "");
-  } else {
-    out.push(renderLaneExplanation(agg), "", escapeMd(agg.summary), "");
-    out.push(`**Overall lane:** ${EMOJI[agg.lane]} \`${agg.lane}\``, "");
-    if (agg.labelReasons.length) out.push(...agg.labelReasons.map((l) => `- 🏷️ ${l}`), "");
+    out.push(...renderLaneMap(agg, { emoji: EMOJI, escape: escapeMd, maxRows: MAX_LIST_ROWS, more: moreNote, checkName: CHECK_NAME, reason: (f) => [escapeMd(f.reasons.join("; ")), aiReasonNote(f)].filter(Boolean).join("; ") }, { imageUrl: r.laneMapImageUrl, panelUrl: r.panelUrl, omitOutcome: true }));
   }
-  out.push(...renderLaneCoach(r.fileFindings?.length ?? 0), "");
-
-  if (!r.laneMap && flagged.length) {
-    out.push("### Files needing human review", "", "| File | Lane | Source | Reason |", "|---|---|---|---|");
-    for (const f of flagged.slice(0, MAX_LIST_ROWS)) {
-      const reason = [escapeMd(f.reasons.join("; ")), aiReasonNote(f)].filter(Boolean).join("; ") || "-";
-      out.push(`| ${escapeMd(f.path)} | ${EMOJI[f.lane]} ${f.lane} | ${f.source ?? "rule"} | ${reason} |`);
-    }
-    out.push(...moreNote(MAX_LIST_ROWS, flagged.length), "");
-  }
+  out.push(escapeMd(agg.summary), "", ...renderLaneCoach(), "");
   if (!r.laneMap && safe.length) {
     out.push(`<details><summary>Safe files (${safe.length})</summary>`, "");
     for (const f of safe.slice(0, MAX_LIST_ROWS)) out.push(`- ${escapeMd(f.path)}${f.codeAuto ? " (code, auto via code_auto opt-in)" : ""}`);
@@ -139,26 +143,28 @@ export function renderComment(r: RenderInput): string {
     const passes = agg.rubric.filter((x) => x.verdict === "pass").length;
     const na = agg.rubric.filter((x) => x.verdict === "n/a").length;
     out.push(`### Rubric: ${passes} pass · ${fails.length} fail/unverified · ${na} n/a`, "");
-    for (const x of fails) {
-      const where = x.evidence ? ` (${escapeMd(x.evidence.path)}${x.evidence.line ? ":" + x.evidence.line : ""})` : "";
-      const sc = x.score !== undefined ? ` ${x.score}/5` : "";
-      out.push(`- ${icon[x.verdict]} \`${escapeMd(x.id)}\` ${x.severity}${sc}${where}: ${escapeMd(x.justification)}${x.raiseTo ? ` → raised to ${x.raiseTo}` : ""}`);
-    }
-    if (fails.length) out.push("");
     out.push(`<details><summary>All criteria</summary>`, "");
     for (const x of agg.rubric.slice(0, MAX_LIST_ROWS))
       out.push(`- ${icon[x.verdict]} \`${escapeMd(x.id)}\`${x.score !== undefined ? ` ${x.score}/5` : ""}: ${escapeMd(x.justification) || "-"}`);
     out.push(...moreNote(MAX_LIST_ROWS, agg.rubric.length), "", "</details>", "");
   }
+  const head = out.join("\n");
+  // Keep coverage in the protected tail so size capping cannot silently remove it.
+  out.length = 0;
+  out.push("### Coverage gaps", "");
+  if (r.mode === "rules-only") out.push("- AI review was not performed; deterministic rules only.", "");
+  for (const p of r.policyFiles ?? []) if (p.truncated) out.push(`- Policy truncated: ${escapeMd(p.path)}`, "");
+  for (const x of agg.rubric ?? []) if (x.verdict === "unverified") out.push(`- Unverified criterion: \`${escapeMd(x.id)}\``, "");
   if (r.fileFindings?.length) {
     const n = r.fileFindings.length;
-    out.push(`### ❔ Needs human (${n})`, "", `${n} finding${n === 1 ? " needs" : "s need"} human validation (no verified diff quote), so ${n === 1 ? "it was" : "they were"} not posted as line comments.`, "");
+    out.push(`#### ❔ Needs human (${n})`, "", `${n} finding${n === 1 ? " needs" : "s need"} human validation (no verified diff quote), so ${n === 1 ? "it was" : "they were"} not posted as line comments.`, "");
     for (const f of r.fileFindings.slice(0, MAX_LIST_ROWS)) out.push(`- ${escapeMd(f.path)}: ${escapeMd(f.message)}`);
     out.push(...moreNote(MAX_LIST_ROWS, r.fileFindings.length), "");
   }
   for (const n of r.notes) out.push(`> ⚠️ ${escapeMd(n)}`, "");
-  const head = out.join("\n");
-  const tail: string[] = ["---", "", renderFeedback(agg.rubric ?? []), ""];
+  if (out.length === 2) out.push("No known coverage gaps reported.", "");
+  const coverage = capBody(out.join("\n"), "", 12_000);
+  const tail: string[] = [coverage, "---", "", renderFeedback(agg.rubric ?? []), ""];
   tail.push(
     `<sub>Mode: ${escapeMd(r.mode)} · ~${r.tokensEstimate} tokens (estimate)` +
       (r.policyFiles?.length

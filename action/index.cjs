@@ -54003,7 +54003,7 @@ var configSchema = external_exports.object({
   review: external_exports.object({
     /** diff = changed hunks only (default). context = + full changed files, their imports and callers. deep = + read-only repo tools backed by an index. */
     mode: external_exports.enum(["diff", "context", "deep"]).default("diff"),
-    /** Opt-in test build: the sticky also shows a lane-choice map (mermaid + buckets + per-file lanes). Explanatory only. */
+    /** Opt-in test build: the sticky also shows a lane-choice map (raiser-first explanation + bucket counts + per-file lanes). Explanatory only. */
     lane_map: external_exports.boolean().default(false)
   }).default({ mode: "diff", lane_map: false }),
   context: external_exports.object({
@@ -54744,7 +54744,6 @@ function feedbackChanged(prev, next) {
 
 // core/lanemap.ts
 var ROOT_BUCKET = "(root)";
-var MAX_MAP_BUCKETS = 8;
 var fileCount = (b) => b.counts.auto + b.counts.review + b.counts.block;
 function groupBuckets(agg) {
   const map2 = /* @__PURE__ */ new Map();
@@ -54760,59 +54759,48 @@ function groupBuckets(agg) {
   }
   return [...map2.values()].sort((a, b) => LANE_ORDER[b.lane] - LANE_ORDER[a.lane] || fileCount(b) - fileCount(a) || a.name.localeCompare(b.name));
 }
-function mermaidText(s, max = 40) {
-  const t = s.replace(/[^A-Za-z0-9._/ -]/g, "_").trim();
-  return (t.length > max ? t.slice(0, max - 1) + "\u2026" : t) || "_";
-}
-function renderMermaid(agg, buckets = groupBuckets(agg)) {
-  const L = ["flowchart LR", `  S(["PR opened"])`];
-  const shown = buckets.slice(0, MAX_MAP_BUCKETS);
-  const inputs = [];
-  shown.forEach((b, i) => {
-    const n = fileCount(b);
-    L.push(`  S --> B${i}["${mermaidText(b.name)}: ${n} file${n === 1 ? "" : "s"} \u2192 ${b.lane}"]`, `  class B${i} ${b.lane}`);
-    inputs.push(`B${i}`);
-  });
-  if (buckets.length > shown.length) {
-    L.push(`  S --> BM["+${buckets.length - shown.length} more buckets"]`);
-    inputs.push("BM");
-  }
-  if (agg.labelReasons.length) {
-    L.push(`  S --> LB["${agg.labelReasons.length} label hold${agg.labelReasons.length === 1 ? "" : "s"}"]`);
-    inputs.push("LB");
-  }
-  L.push(`  F{{"PR lane: ${agg.lane}"}}`, `  class F ${agg.lane}`);
-  if (!inputs.length) L.push("  S --> F");
-  for (const id of inputs) L.push(`  ${id} --> F`);
-  L.push("  classDef auto fill:#2da44e,color:#fff", "  classDef review fill:#bf8700,color:#fff", "  classDef block fill:#cf222e,color:#fff");
-  return L.join("\n");
-}
 var plainHttps = (u) => u && /^https:\/\/[^\s()<>"'`]+$/.test(u) ? u : void 0;
 function renderLaneMap(agg, env, opts = {}) {
   const { emoji: emoji3, escape: esc2 } = env;
   const buckets = groupBuckets(agg);
-  const out = ["### \u{1F5FA}\uFE0F Lane choice map", ""];
+  const out = [];
   const img = plainHttps(opts.imageUrl);
-  if (img) out.push(`![Lane map](${img})`, "");
-  out.push("```mermaid", renderMermaid(agg, buckets), "```", "");
-  out.push(
-    `The PR lane is the strictest lane any file, label or PR-level rule reached; the map only explains it. ${emoji3.review} \`review\` is advisory (\`${env.checkName}\` stays neutral); ${emoji3.block} \`block\` fails \`${env.checkName}\`.`,
-    ""
-  );
+  if (img) out.push(`![Lane map](${img})`, "", "_Decision path: PR opened \u2192 directory buckets \u2192 label / PR holds \u2192 final lane; green = auto, amber = review, red = block._", "");
+  const raisers = agg.files.filter((f) => agg.lane !== "auto" && f.lane === agg.lane);
+  const causes = [
+    ...raisers.slice(0, env.maxRows).map((f) => esc2(f.path)),
+    ...raisers.length > env.maxRows ? [`${raisers.length - env.maxRows} more files`] : [],
+    ...agg.labelReasons.slice(0, env.maxRows).map(esc2)
+  ];
+  const why = causes.length ? `raised by ${causes.join("; ")}` : agg.lane === "auto" ? `all ${agg.files.length} files are auto; no holds raised the lane` : "no file or hold reason supplied";
+  out.push(`Why this lane? ${emoji3[agg.lane]} \`${agg.lane}\` \u2014 ${why}.`, "");
+  const counts = { auto: 0, review: 0, block: 0 };
+  for (const f of agg.files) counts[f.lane]++;
+  out.push(`${emoji3.auto} \`auto ${counts.auto}\` \xB7 ${emoji3.review} \`review ${counts.review}\` \xB7 ${emoji3.block} \`block ${counts.block}\` \xB7 **${agg.files.length} files total**`, "", "### \u{1F5FA}\uFE0F Lane choice map", "");
   if (buckets.length) {
-    out.push("| Bucket | " + emoji3.auto + " auto | " + emoji3.review + " review | " + emoji3.block + " block | Raised the PR lane |", "|---|---|---|---|---|");
+    out.push("| Bucket | " + emoji3.auto + " auto | " + emoji3.review + " review | " + emoji3.block + " block |", "|---|---|---|---|");
     for (const b of buckets.slice(0, env.maxRows)) {
-      const raised = b.raisers.length ? b.raisers.slice(0, 3).map(esc2).join(", ") + (b.raisers.length > 3 ? ` (+${b.raisers.length - 3})` : "") : "-";
-      out.push(`| ${esc2(b.name)} | ${b.counts.auto} | ${b.counts.review} | ${b.counts.block} | ${raised} |`);
+      out.push(`| ${esc2(b.name)} | ${b.counts.auto} | ${b.counts.review} | ${b.counts.block} |`);
     }
     out.push(...env.more(env.maxRows, buckets.length), "");
   }
-  if (agg.labelReasons.length) out.push(...agg.labelReasons.slice(0, env.maxRows).map((l) => `- \u{1F3F7}\uFE0F Label hold: ${esc2(l)}`), "");
   if (agg.files.length) {
-    out.push(`<details><summary>Per-file lanes (${agg.files.length})</summary>`, "");
-    for (const f of agg.files.slice(0, env.maxRows)) out.push(`- ${emoji3[f.lane]} \`${f.lane}\` ${esc2(f.path)}`);
-    out.push(...env.more(env.maxRows, agg.files.length), "", "</details>", "");
+    const files = [...agg.files].sort((a, b) => LANE_ORDER[b.lane] - LANE_ORDER[a.lane]);
+    out.push(
+      `### File lanes (${agg.files.length})`,
+      "",
+      "Raisers first, then other review/block files, then auto files (up to " + env.maxRows + " rows).",
+      "",
+      "| File | Lane | Source | Reason |",
+      "|---|---|---|---|"
+    );
+    for (const f of files.slice(0, env.maxRows)) {
+      const raised = agg.lane !== "auto" && f.lane === agg.lane ? " \xB7 **raiser**" : "";
+      out.push(`| ${esc2(f.path)} | ${emoji3[f.lane]} \`${f.lane}\`${raised} | ${esc2(f.source ?? "rule")} | ${env.reason?.(f) || esc2(f.reasons.join("; ")) || "-"} |`);
+    }
+    out.push(...env.more(env.maxRows, files.length), "");
   }
+  out.push(`${emoji3.review} \`review\` is advisory (\`${env.checkName}\` stays neutral); ${emoji3.block} \`block\` fails \`${env.checkName}\`. The map only explains the lane.`, "");
   const panel = plainHttps(opts.panelUrl);
   if (panel) out.push(`[Deeper view in MergeJudge panel](${panel})`, "");
   return out;
@@ -54873,14 +54861,16 @@ function renderComment(r) {
   const flagged = agg.files.filter((f) => f.lane !== "auto");
   const safe = agg.files.filter((f) => f.lane === "auto");
   const out = [MARKER, "## \u2696\uFE0F MergeJudge", ""];
-  out.push(renderLaneExplanation(agg), "", escapeMd(agg.summary), "");
-  out.push(`**Overall lane:** ${EMOJI[agg.lane]} \`${agg.lane}\``, "");
-  if (agg.labelReasons.length) out.push(...agg.labelReasons.map((l) => `- \u{1F3F7}\uFE0F ${l}`), "");
-  out.push(...renderLaneCoach(r.fileFindings?.length ?? 0), "");
   if (r.laneMap === true) {
-    out.push(...renderLaneMap(agg, { emoji: EMOJI, escape: escapeMd, maxRows: MAX_LIST_ROWS, more: moreNote, checkName: CHECK_NAME }, { imageUrl: r.laneMapImageUrl, panelUrl: r.panelUrl }));
+    out.push(...renderLaneMap(agg, { emoji: EMOJI, escape: escapeMd, maxRows: MAX_LIST_ROWS, more: moreNote, checkName: CHECK_NAME, reason: (f) => [escapeMd(f.reasons.join("; ")), aiReasonNote(f)].filter(Boolean).join("; ") }, { imageUrl: r.laneMapImageUrl, panelUrl: r.panelUrl }));
+    out.push(escapeMd(agg.summary), "");
+  } else {
+    out.push(renderLaneExplanation(agg), "", escapeMd(agg.summary), "");
+    out.push(`**Overall lane:** ${EMOJI[agg.lane]} \`${agg.lane}\``, "");
+    if (agg.labelReasons.length) out.push(...agg.labelReasons.map((l) => `- \u{1F3F7}\uFE0F ${l}`), "");
   }
-  if (flagged.length) {
+  out.push(...renderLaneCoach(r.fileFindings?.length ?? 0), "");
+  if (!r.laneMap && flagged.length) {
     out.push("### Files needing human review", "", "| File | Lane | Source | Reason |", "|---|---|---|---|");
     for (const f of flagged.slice(0, MAX_LIST_ROWS)) {
       const reason = [escapeMd(f.reasons.join("; ")), aiReasonNote(f)].filter(Boolean).join("; ") || "-";
@@ -54888,7 +54878,7 @@ function renderComment(r) {
     }
     out.push(...moreNote(MAX_LIST_ROWS, flagged.length), "");
   }
-  if (safe.length) {
+  if (!r.laneMap && safe.length) {
     out.push(`<details><summary>Safe files (${safe.length})</summary>`, "");
     for (const f of safe.slice(0, MAX_LIST_ROWS)) out.push(`- ${escapeMd(f.path)}${f.codeAuto ? " (code, auto via code_auto opt-in)" : ""}`);
     out.push(...moreNote(MAX_LIST_ROWS, safe.length), "", "</details>", "");

@@ -1,5 +1,6 @@
 import { explainLane, type Aggregate } from "./aggregate.js";
 import { renderFeedback } from "./feedback.js";
+import { renderLaneMap } from "./lanemap.js";
 import type { Lane } from "./types.js";
 
 export const MARKER = "<!-- mergejudge:summary -->";
@@ -45,6 +46,12 @@ export interface RenderInput {
   breakdown?: { system: number; policy: number; rubric: number; diff: number; context?: number; tools?: number; tool_calls?: number; output: number; total: number };
   /** The repo config's approval settings; the footer mentions auto-merge only when enabled with mode auto-merge-only. */
   approval?: { enabled?: boolean; mode?: string } | null;
+  /** review.lane_map (default off): add the lane-choice map section. Explanatory only; never changes the lane. */
+  laneMap?: boolean;
+  /** Optional https URL of a hosted `buildLaneMapGif` image; embedded above the mermaid map when laneMap is on. */
+  laneMapImageUrl?: string;
+  /** Optional MergeJudge panel URL; adds one link line to the lane map. The sticky stands alone without it. */
+  panelUrl?: string;
 }
 
 /** The AI's per-file reason, escaped and capped, unless the rule reasons already say it. */
@@ -96,6 +103,10 @@ export function renderComment(r: RenderInput): string {
   out.push(`**Overall lane:** ${EMOJI[agg.lane]} \`${agg.lane}\``, "");
   if (agg.labelReasons.length) out.push(...agg.labelReasons.map((l) => `- 🏷️ ${l}`), "");
   out.push(...renderLaneCoach(r.fileFindings?.length ?? 0), "");
+
+  if (r.laneMap === true) {
+    out.push(...renderLaneMap(agg, { emoji: EMOJI, escape: escapeMd, maxRows: MAX_LIST_ROWS, more: moreNote, checkName: CHECK_NAME }, { imageUrl: r.laneMapImageUrl, panelUrl: r.panelUrl }));
+  }
 
   if (flagged.length) {
     out.push("### Files needing human review", "", "| File | Lane | Source | Reason |", "|---|---|---|---|");

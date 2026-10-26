@@ -54773,7 +54773,7 @@ function renderLaneMap(agg, env, opts = {}) {
     ...agg.labelReasons.slice(0, env.maxRows).map(esc2)
   ];
   const why = causes.length ? `raised by ${causes.join("; ")}` : agg.lane === "auto" ? `all ${agg.files.length} files are auto; no holds raised the lane` : "no file or hold reason supplied";
-  out.push(`Why this lane? ${emoji3[agg.lane]} \`${agg.lane}\` \u2014 ${why}.`, "");
+  if (!opts.omitOutcome) out.push(`Why this lane? ${emoji3[agg.lane]} \`${agg.lane}\` \u2014 ${why}.`, "");
   const counts = { auto: 0, review: 0, block: 0 };
   for (const f of agg.files) counts[f.lane]++;
   out.push(`${emoji3.auto} \`auto ${counts.auto}\` \xB7 ${emoji3.review} \`review ${counts.review}\` \xB7 ${emoji3.block} \`block ${counts.block}\` \xB7 **${agg.files.length} files total**`, "", "### \u{1F5FA}\uFE0F Lane choice map", "");
@@ -54861,23 +54861,32 @@ function renderComment(r) {
   const flagged = agg.files.filter((f) => f.lane !== "auto");
   const safe = agg.files.filter((f) => f.lane === "auto");
   const out = [MARKER, "## \u2696\uFE0F MergeJudge", ""];
+  out.push(`**Overall lane:** ${EMOJI[agg.lane]} \`${agg.lane}\``, "", renderLaneExplanation(agg), "");
+  out.push("### Findings", "");
+  const findings = [
+    ...flagged.map((f) => ({ lane: f.lane, text: `${escapeMd(f.path)} (${f.source ?? "rule"}): ${[escapeMd(f.reasons.join("; ")), aiReasonNote(f)].filter(Boolean).join("; ") || "-"}` })),
+    ...agg.labelReasons.map((reason) => ({ lane: agg.lane, text: `\u{1F3F7}\uFE0F ${escapeMd(reason)}` })),
+    ...(agg.rubric ?? []).filter((x) => x.verdict === "fail" || x.verdict === "unverified").map((x) => ({
+      lane: x.raiseTo ?? "auto",
+      text: `${x.verdict === "unverified" ? "\u2754 " : "\u274C "}\`${escapeMd(x.id)}\` ${x.severity}${x.score !== void 0 ? ` ${x.score}/5` : ""}${x.evidence ? ` (${escapeMd(x.evidence.path)}${x.evidence.line ? ":" + x.evidence.line : ""})` : ""}: ${escapeMd(x.justification)}${x.raiseTo ? ` \u2192 raised to ${x.raiseTo}` : ""}`
+    }))
+  ];
+  for (const lane of ["block", "review", "auto"]) {
+    const group = findings.filter((f) => f.lane === lane);
+    if (!group.length) continue;
+    out.push(
+      `#### ${lane === "auto" ? "Informational" : lane === "block" ? "Block" : "Review"}`,
+      "",
+      ...group.slice(0, MAX_LIST_ROWS).map((f) => `- ${f.text}`),
+      ...moreNote(MAX_LIST_ROWS, group.length),
+      ""
+    );
+  }
+  if (!findings.length) out.push("No lane-raising findings.", "");
   if (r.laneMap === true) {
-    out.push(...renderLaneMap(agg, { emoji: EMOJI, escape: escapeMd, maxRows: MAX_LIST_ROWS, more: moreNote, checkName: CHECK_NAME, reason: (f) => [escapeMd(f.reasons.join("; ")), aiReasonNote(f)].filter(Boolean).join("; ") }, { imageUrl: r.laneMapImageUrl, panelUrl: r.panelUrl }));
-    out.push(escapeMd(agg.summary), "");
-  } else {
-    out.push(renderLaneExplanation(agg), "", escapeMd(agg.summary), "");
-    out.push(`**Overall lane:** ${EMOJI[agg.lane]} \`${agg.lane}\``, "");
-    if (agg.labelReasons.length) out.push(...agg.labelReasons.map((l) => `- \u{1F3F7}\uFE0F ${l}`), "");
+    out.push(...renderLaneMap(agg, { emoji: EMOJI, escape: escapeMd, maxRows: MAX_LIST_ROWS, more: moreNote, checkName: CHECK_NAME, reason: (f) => [escapeMd(f.reasons.join("; ")), aiReasonNote(f)].filter(Boolean).join("; ") }, { imageUrl: r.laneMapImageUrl, panelUrl: r.panelUrl, omitOutcome: true }));
   }
-  out.push(...renderLaneCoach(r.fileFindings?.length ?? 0), "");
-  if (!r.laneMap && flagged.length) {
-    out.push("### Files needing human review", "", "| File | Lane | Source | Reason |", "|---|---|---|---|");
-    for (const f of flagged.slice(0, MAX_LIST_ROWS)) {
-      const reason = [escapeMd(f.reasons.join("; ")), aiReasonNote(f)].filter(Boolean).join("; ") || "-";
-      out.push(`| ${escapeMd(f.path)} | ${EMOJI[f.lane]} ${f.lane} | ${f.source ?? "rule"} | ${reason} |`);
-    }
-    out.push(...moreNote(MAX_LIST_ROWS, flagged.length), "");
-  }
+  out.push(escapeMd(agg.summary), "", ...renderLaneCoach(), "");
   if (!r.laneMap && safe.length) {
     out.push(`<details><summary>Safe files (${safe.length})</summary>`, "");
     for (const f of safe.slice(0, MAX_LIST_ROWS)) out.push(`- ${escapeMd(f.path)}${f.codeAuto ? " (code, auto via code_auto opt-in)" : ""}`);
@@ -54900,26 +54909,27 @@ function renderComment(r) {
     const passes = agg.rubric.filter((x) => x.verdict === "pass").length;
     const na = agg.rubric.filter((x) => x.verdict === "n/a").length;
     out.push(`### Rubric: ${passes} pass \xB7 ${fails.length} fail/unverified \xB7 ${na} n/a`, "");
-    for (const x of fails) {
-      const where = x.evidence ? ` (${escapeMd(x.evidence.path)}${x.evidence.line ? ":" + x.evidence.line : ""})` : "";
-      const sc = x.score !== void 0 ? ` ${x.score}/5` : "";
-      out.push(`- ${icon[x.verdict]} \`${escapeMd(x.id)}\` ${x.severity}${sc}${where}: ${escapeMd(x.justification)}${x.raiseTo ? ` \u2192 raised to ${x.raiseTo}` : ""}`);
-    }
-    if (fails.length) out.push("");
     out.push(`<details><summary>All criteria</summary>`, "");
     for (const x of agg.rubric.slice(0, MAX_LIST_ROWS))
       out.push(`- ${icon[x.verdict]} \`${escapeMd(x.id)}\`${x.score !== void 0 ? ` ${x.score}/5` : ""}: ${escapeMd(x.justification) || "-"}`);
     out.push(...moreNote(MAX_LIST_ROWS, agg.rubric.length), "", "</details>", "");
   }
+  const head = out.join("\n");
+  out.length = 0;
+  out.push("### Coverage gaps", "");
+  if (r.mode === "rules-only") out.push("- AI review was not performed; deterministic rules only.", "");
+  for (const p of r.policyFiles ?? []) if (p.truncated) out.push(`- Policy truncated: ${escapeMd(p.path)}`, "");
+  for (const x of agg.rubric ?? []) if (x.verdict === "unverified") out.push(`- Unverified criterion: \`${escapeMd(x.id)}\``, "");
   if (r.fileFindings?.length) {
     const n = r.fileFindings.length;
-    out.push(`### \u2754 Needs human (${n})`, "", `${n} finding${n === 1 ? " needs" : "s need"} human validation (no verified diff quote), so ${n === 1 ? "it was" : "they were"} not posted as line comments.`, "");
+    out.push(`#### \u2754 Needs human (${n})`, "", `${n} finding${n === 1 ? " needs" : "s need"} human validation (no verified diff quote), so ${n === 1 ? "it was" : "they were"} not posted as line comments.`, "");
     for (const f of r.fileFindings.slice(0, MAX_LIST_ROWS)) out.push(`- ${escapeMd(f.path)}: ${escapeMd(f.message)}`);
     out.push(...moreNote(MAX_LIST_ROWS, r.fileFindings.length), "");
   }
   for (const n of r.notes) out.push(`> \u26A0\uFE0F ${escapeMd(n)}`, "");
-  const head = out.join("\n");
-  const tail = ["---", "", renderFeedback(agg.rubric ?? []), ""];
+  if (out.length === 2) out.push("No known coverage gaps reported.", "");
+  const coverage = capBody(out.join("\n"), "", 12e3);
+  const tail = [coverage, "---", "", renderFeedback(agg.rubric ?? []), ""];
   tail.push(
     `<sub>Mode: ${escapeMd(r.mode)} \xB7 ~${r.tokensEstimate} tokens (estimate)` + (r.policyFiles?.length ? ` \xB7 Policy: ${r.policyFiles.map((p) => escapeMd(p.path) + (p.truncated ? " (truncated)" : "")).join(", ")}` : "") + (r.breakdown ? ` \xB7 tokens system ${r.breakdown.system}/policy ${r.breakdown.policy}/rubric ${r.breakdown.rubric}/diff ${r.breakdown.diff}${r.breakdown.context ? `/context ${r.breakdown.context}` : ""}${r.breakdown.tools ? `/tools ${r.breakdown.tools} (${r.breakdown.tool_calls ?? 0} calls)` : ""}/out ${r.breakdown.output}` : "") + ` \xB7 ${mergeNote(r.approval)}</sub>`
   );
@@ -58602,6 +58612,7 @@ async function produceReviewResult(o) {
     const prompt = { title: pr.title ?? "", body: pr.body ?? "", files: kept, context: context3 };
     const tctx = { policyText: policies.text, criteria, learnedText: cfg.learning.enabled ? o.learnedLines ? renderLearnedSection(o.learnedLines, DELIM) : buildLearnedContext({ learned: o.learned, lessons: o.lessons, outcomeStats: o.outcomeStats }, DELIM) : "", skippedDiffFiles: skipped, ref: o.ref ?? `#${pr.number}` };
     const res = mode === "deep" && tools && canUseTools(provider) ? await runDeepTriage(provider, prompt, cfg, tctx, { tools }, log.info, log.warning) : await runTriage(provider, prompt, cfg, tctx, log.info, log.warning);
+    if (res.deep?.stopped) notes.push(`AI tool budget exhausted (${res.deep.stopped}); further exploration was not checked.`);
     usedMode = retrievedDeep ? "deep" : mode;
     tokens2 = res.tokensEstimate;
     llm = res.llm;
@@ -58614,6 +58625,10 @@ async function produceReviewResult(o) {
       await o.llmCache.put({ llm, tokens: tokens2, breakdown: res.breakdown, policiesUsed: policies.used }).catch((e) => log.warning(`Could not cache LLM result: ${e.message}`));
     }
   }
+  const excluded = excludeFromLlm(files, cfg.diff_exclude).skipped;
+  for (const path2 of excluded) notes.push(`Diff excluded from AI review: ${path2}`);
+  for (const f of files) if (!f.patch) notes.push(`Diff unavailable: ${f.path}`);
+  for (const path2 of policies.skipped) notes.push(`Policy file missing or empty: ${path2}`);
   const agg = aggregate(files, labels, cfg, llm, { body: pr.body ?? null, user: pr.user ?? null, configPaths: o.configPaths });
   let findings = llm?.findings ?? [];
   if (llm && cfg.learning.enabled && o.learned?.length) {

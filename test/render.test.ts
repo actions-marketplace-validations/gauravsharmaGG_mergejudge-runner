@@ -51,7 +51,7 @@ describe("AI reason and lane explanation", () => {
 });
 
 describe("sticky report order", () => {
-  for (const count of [1, 18]) for (const laneMap of [false, true]) {
+  for (const count of [1, 30]) for (const laneMap of [false, true]) {
     it(`orders ${count} files with lane map ${laneMap}`, () => {
       const files = Array.from({ length: count }, (_, i) => ({
         path: `src/${i}.ts`, lane: "review" as const, reasons: [`review-file-${i}`], additions: 1, deletions: 0,

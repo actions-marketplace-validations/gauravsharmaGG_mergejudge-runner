@@ -148,10 +148,22 @@ export const configSchema = z.object({
     .object({
       /** diff = changed hunks only (default). context = + full changed files, their imports and callers. deep = + read-only repo tools backed by an index. */
       mode: z.enum(["diff", "context", "deep"]).default("diff"),
-      /** Opt-in test build: the sticky also shows a lane-choice map (mermaid + buckets + per-file lanes). Explanatory only. */
+      /** Opt-in test build: the sticky also shows a lane-choice map (raiser-first explanation + bucket counts + per-file lanes). Explanatory only. */
       lane_map: z.boolean().default(false),
     })
     .default({ mode: "diff", lane_map: false }),
+  /**
+   * How many model passes run over the diff. `fast` (default) is the single pass.
+   * `deep` adds a second pass for cross-hunk, concurrency, security, data and API defects.
+   * Second-pass findings are kept only when their quote matches the diff. This is separate from
+   * `review.mode`, which chooses how much surrounding code is attached to the prompt.
+   * Deterministic base-branch rules stay the floor. auto means low risk, not a guarantee.
+   */
+  ai: z
+    .object({
+      mode: z.enum(["fast", "deep"]).default("fast"),
+    })
+    .default({ mode: "fast" }),
   context: z
     .object({
       max_bytes: z.number().int().positive().default(40_000),

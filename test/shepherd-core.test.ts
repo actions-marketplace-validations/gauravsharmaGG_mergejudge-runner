@@ -5,7 +5,7 @@ import { parse } from "yaml";
 import { parseConfig } from "../core/config.js";
 import { isProtectedPath } from "../core/shepherd.js";
 import {
-  buildCommitMessage, classifyFailure, countFailingChecks, countFailingTests, decide, failureCount, firstFailureLine, fingerprintFailure, isGreen, isShepherdCommitMessage,
+  buildCommitMessage, classifyFailure, countFailingChecks, countFailingTests, decide, extractFailureSection, failureCount, firstFailureLine, fingerprintFailure, isGreen, isShepherdCommitMessage,
   normalizeError, parseAttemptCommit, referencedFiles, shepherdHistory, tailLog, type DecideInput, type Fingerprint,
 } from "../core/shepherdfail.js";
 import { classifyConflictFile, isLockfile, mergeImportHunk, parseConflicts, unionLines } from "../core/shepherdconflict.js";
@@ -53,6 +53,39 @@ describe("error fingerprint normalisation", () => {
     expect(fingerprintFailure("test", l1).hash).toBe(fingerprintFailure("test", l2).hash);
     expect(fingerprintFailure("lint", l1).hash).not.toBe(fingerprintFailure("test", l1).hash);
     expect(fingerprintFailure("test", "FAIL b\nTypeError: x is not a function").hash).not.toBe(fingerprintFailure("test", l1).hash);
+  });
+  describe("failing step section of a real job log", () => {
+    const pr8 = readFileSync(join(root, "test/fixtures/shepherd/pr8-lint-job.txt"), "utf8");
+    const pr12 = readFileSync(join(root, "test/fixtures/shepherd/pr12-lint-job.txt"), "utf8");
+    const CLEANUP = /Post job cleanup|\[command\]|git submodule foreach|Cleaning up orphan|Node\.js 20 is deprecated|##\[|^\d{4}-\d\d-\d\dT/m;
+    it("extracted failure text holds its own error line and no cleanup lines", () => {
+      const a = extractFailureSection(pr8), b = extractFailureSection(pr12);
+      expect(a).toContain("src/mul.js:5: use let or const, not var");
+      expect(b).toContain("src/max.js:12: use let or const, not var");
+      expect(a).not.toContain("max.js");
+      expect(b).not.toContain("mul.js");
+      expect(a).not.toMatch(CLEANUP);
+      expect(b).not.toMatch(CLEANUP);
+      expect(fingerprintFailure("lint", a).raw).toContain("src/mul.js:5");
+    });
+    it("two different lint errors get different fingerprints, the same log twice the same one", () => {
+      const fp = (log: string) => fingerprintFailure("lint", tailLog(extractFailureSection(log), 200, 20_000));
+      expect(fp(pr8).hash).not.toBe(fp(pr12).hash);
+      expect(fp(pr8).hash).toBe(fp(pr8).hash);
+      expect(fp(pr12).hash).toBe(fingerprintFailure("lint", extractFailureSection(pr12)).hash);
+    });
+    it("the old whole-log tail is what collided", () => {
+      expect(fingerprintFailure("lint", tailLog(pr8, 200, 20_000)).hash).toBe(fingerprintFailure("lint", tailLog(pr12, 200, 20_000)).hash);
+    });
+    it("a log without a post-job section or step header is kept, minus noise", () => {
+      expect(extractFailureSection("2026-10-29T10:00:00.1Z ##[group]x\n2026-10-29T10:00:00.2Z boom: bad\n##[endgroup]")).toBe("boom: bad");
+      expect(extractFailureSection("")).toBe("");
+    });
+    it("keeps the same message in two files apart", () => {
+      expect(normalizeError("src/a.js:5: use let or const, not var")).not.toBe(normalizeError("src/b.js:5: use let or const, not var"));
+      expect(normalizeError("/tmp/x/a.js:5: bad")).not.toBe(normalizeError("/tmp/x/b.js:5: bad"));
+      expect(normalizeError("/home/runner/work/r/r/src/a.js:5: bad")).toBe(normalizeError("/home/runner/work/o/o/src/a.js:9: bad"));
+    });
   });
   it("counts failing tests from common runners", () => {
     expect(countFailingTests("Tests:       3 failed, 10 passed")).toBe(3);

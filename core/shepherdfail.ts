@@ -8,12 +8,20 @@ const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
 const TS_PREFIX = /^\s*(?:\d{4}-\d\d-\d\dT[\d:.]+Z\s*)?(?:\[?\d\d:\d\d:\d\d(?:\.\d+)?\]?\s*)?/;
 export const stripAnsi = (s: string) => s.replace(ANSI, "");
 
-/** Normalise one failure line so the same failure reads the same across runs: no ANSI, timestamps, line:col, durations, hashes, paths or numbers. */
+/** The hosted runner's checkout directory, so a file in the repo reads the same (relative) in every run. */
+const RUNNER_WORKSPACE = /(?<![\w.])(?:\/(?:home|Users)\/runner\/work\/[\w.@+~-]+\/[\w.@+~-]+|[A-Za-z]:\\a\\[\w.@+~-]+\\[\w.@+~-]+)[\\/]/g;
+
+/**
+ * Normalise one failure line so the same failure reads the same across runs: no ANSI, timestamps, line:col, durations, hashes,
+ * checkout paths or numbers. A file name is kept (relative to the checkout, or the last segment of another absolute path),
+ * so the same message in two different files stays two failures.
+ */
 export function normalizeError(line: string): string {
   return stripAnsi(line)
     .replace(TS_PREFIX, "")
     .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, "<id>")
-    .replace(/(?<![\w.])(?:[A-Za-z]:)?(?:[\\/][\w.@+~-]+){2,}[\\/]?/g, "<path>")
+    .replace(RUNNER_WORKSPACE, "")
+    .replace(/(?<![\w.])(?:[A-Za-z]:)?(?:[\\/][\w.@+~-]+){2,}[\\/]?/g, (m) => `<path>/${m.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? ""}`)
     .replace(/(?<=[\w>)]):\d+(?::\d+)?/g, "")
     .replace(/\(\d+,\d+\)/g, "")
     .replace(/\b\d+(?:\.\d+)?\s?(?:ms|s|sec|secs|seconds|min|m)\b/gi, "<t>")
@@ -56,7 +64,7 @@ export function firstFailureLine(log: string): string {
     const detail = hits.slice(1).find((l) => !BARE_HEADER.test(l));
     return detail ? `${head} | ${detail.trim()}` : head;
   }
-  const tail = lines.filter((l) => l.trim() && !NOISE.test(l.trim())).slice(-3).map((l) => l.trim());
+  const tail = lines.filter((l) => l.trim() && !NOISE.test(l.trim()) && !/^>\s/.test(l)).slice(-3).map((l) => l.trim());
   return tail.join(" | ");
 }
 
@@ -137,6 +145,38 @@ export function countFailingChecks(checkRuns: CheckRunLite[], statuses: StatusLi
     else if (FAILING_STATUS.has(s.state)) failing++;
   }
   return { failing, pending };
+}
+
+const GH_TS = /^(?:﻿)?\d{4}-\d\d-\d\dT[\d:.]+Z ?/;
+/** Where a job's own output ends: the post-job steps and the runner epilogue. */
+const JOB_EPILOGUE = /^(?:Post job cleanup\.|Cleaning up orphan processes|Evaluate and set job outputs)/;
+const STEP_ERROR = /^##\[error\]Process completed with exit code/;
+const RUNNER_NOISE = /^(?:\[command\]|##\[(?:group|endgroup|warning|debug|notice)\])/;
+
+/**
+ * The failing step's own output, cut from a whole job log: GitHub timestamps, `[command]` and `##[group]` lines are
+ * removed, the section starts after the step's `Run ...` header and ends at the `##[error]` that ended the step (or at the
+ * first post-job line, whichever comes first). Without a step header the log up to the epilogue is used. When nothing is
+ * left after filtering, the log up to the epilogue is returned with only the noise removed.
+ */
+export function extractFailureSection(raw: string): string {
+  const all = stripAnsi(raw).split(/\r?\n/).map((l) => l.replace(GH_TS, ""));
+  let end = all.findIndex((l) => JOB_EPILOGUE.test(l));
+  if (end < 0) end = all.length;
+  const stepEnd = all.slice(0, end).findIndex((l) => STEP_ERROR.test(l));
+  const stop = stepEnd >= 0 ? stepEnd : end;
+  let start = 0;
+  for (let i = stop - 1; i >= 0; i--) {
+    if (!all[i]!.startsWith("##[group]Run ")) continue;
+    start = i + 1;
+    while (start < stop && !all[start]!.startsWith("##[endgroup]")) start++;
+    start++;
+    break;
+  }
+  const keep = (l: string) => !RUNNER_NOISE.test(l);
+  const unwrap = (l: string) => l.replace(/^##\[error\]/, "");
+  const section = all.slice(start, stop).filter(keep).map(unwrap).join("\n").trim();
+  return section || all.slice(0, end).filter(keep).map(unwrap).join("\n").trim();
 }
 
 /** Last `lines` lines, at most `maxChars` characters (the end of the log is what failed). */

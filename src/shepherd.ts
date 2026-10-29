@@ -19,7 +19,7 @@ import {
 } from "../core/shepherd.js";
 import { classifyConflictFile, isLockfile, manifestOf, unionLines } from "../core/shepherdconflict.js";
 import {
-  buildCommitMessage, classifyFailure, countFailingChecks, decide, fingerprintFailure, isGreen, referencedFiles, shepherdHistory, tailLog,
+  buildCommitMessage, classifyFailure, countFailingChecks, decide, extractFailureSection, fingerprintFailure, isGreen, referencedFiles, shepherdHistory, tailLog,
   type CheckTally, type Decision, type Fingerprint, type ShepherdHistory,
 } from "../core/shepherdfail.js";
 import { HANDOFF_MARKER, NEEDS_HUMAN_LABEL, renderHandoff } from "../core/shepherdhandoff.js";
@@ -469,7 +469,7 @@ async function evaluateFailedRun(c: ShepherdCtx, pr: PullLite, run: { id: number
   for (const j of failedJobs) {
     let raw = "";
     try { raw = String((await c.ok.rest.actions.downloadJobLogsForWorkflowRun({ ...c.repo, job_id: j.id })).data ?? ""); } catch (e) { warn(c, `Could not download the log of job ${j.name}: ${(e as Error).message}`); }
-    logs[j.name] = redactLog(tailLog(raw, 200, 20_000));
+    logs[j.name] = redactLog(tailLog(extractFailureSection(raw), 200, 20_000));
     fps.push(fingerprintFailure(j.name, logs[j.name]!));
   }
   const cantFix = classifyFailure(failedJobs.map((j) => ({ name: j.name, conclusion: j.conclusion })), logs, (f) => isProtectedPath(f, c.cfg));

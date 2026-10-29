@@ -1,0 +1,164 @@
+﻿2026-10-29T17:23:19.4486769Z Current runner version: '2.338.0'
+2026-10-29T17:23:19.4523172Z ##[group]Runner Image Provisioner
+2026-10-29T17:23:19.4524545Z Hosted Compute Agent
+2026-10-29T17:23:19.4525484Z Version: 20261021.618
+2026-10-29T17:23:19.4526630Z Commit: 21505ad2541d5be6135ed84fc33697146cf75b8e
+2026-10-29T17:23:19.4527954Z Build Date: 2026-10-21T00:45:21Z
+2026-10-29T17:23:19.4529122Z Worker ID: {728327af-e268-48b5-8e68-2c1bf7ea91d1}
+2026-10-29T17:23:19.4530378Z Region: eastus
+2026-10-29T17:23:19.4531302Z Cloud: Azure
+2026-10-29T17:23:19.4532235Z ##[endgroup]
+2026-10-29T17:23:19.4535323Z ##[group]Operating System
+2026-10-29T17:23:19.4536411Z Ubuntu
+2026-10-29T17:23:19.4537329Z 24.04.5
+2026-10-29T17:23:19.4538155Z LTS
+2026-10-29T17:23:19.4539084Z ##[endgroup]
+2026-10-29T17:23:19.4540063Z ##[group]Runner Image
+2026-10-29T17:23:19.4541160Z Image: ubuntu-24.04
+2026-10-29T17:23:19.4542165Z Version: 20261025.353.1
+2026-10-29T17:23:19.4544627Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261025.353/images/ubuntu/Ubuntu2404-Readme.md
+2026-10-29T17:23:19.4547477Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261025.353
+2026-10-29T17:23:19.4549293Z ##[endgroup]
+2026-10-29T17:23:19.4551127Z ##[group]GITHUB_TOKEN Permissions
+2026-10-29T17:23:19.4554510Z Contents: read
+2026-10-29T17:23:19.4555489Z Metadata: read
+2026-10-29T17:23:19.4556599Z ##[endgroup]
+2026-10-29T17:23:19.4559895Z Secret source: Actions
+2026-10-29T17:23:19.4561421Z Cache mode: write
+2026-10-29T17:23:19.4563345Z Prepare workflow directory
+2026-10-29T17:23:19.5074723Z Prepare all required actions
+2026-10-29T17:23:19.5150281Z Getting action download info
+2026-10-29T17:23:19.7061533Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-10-29T17:23:19.8278523Z Download action repository 'actions/setup-node@v4' (SHA:49933ea5288caeca8642d1e84afbd3f7d6820020)
+2026-10-29T17:23:20.0242168Z Complete job name: lint
+2026-10-29T17:23:20.1260059Z ##[group]Run actions/checkout@v4
+2026-10-29T17:23:20.1260982Z with:
+2026-10-29T17:23:20.1261491Z   repository: gauravsharmaGG/mergejudge-free-test
+2026-10-29T17:23:20.1265892Z   token: ***
+2026-10-29T17:23:20.1266341Z   ssh-strict: true
+2026-10-29T17:23:20.1266811Z   ssh-user: git
+2026-10-29T17:23:20.1267268Z   persist-credentials: true
+2026-10-29T17:23:20.1267767Z   clean: true
+2026-10-29T17:23:20.1268220Z   sparse-checkout-cone-mode: true
+2026-10-29T17:23:20.1268744Z   fetch-depth: 1
+2026-10-29T17:23:20.1269174Z   fetch-tags: false
+2026-10-29T17:23:20.1269616Z   show-progress: true
+2026-10-29T17:23:20.1270059Z   lfs: false
+2026-10-29T17:23:20.1270468Z   submodules: false
+2026-10-29T17:23:20.1270913Z   set-safe-directory: true
+2026-10-29T17:23:20.1271412Z   allow-unsafe-pr-checkout: false
+2026-10-29T17:23:20.1272207Z ##[endgroup]
+2026-10-29T17:23:20.3991835Z Syncing repository: gauravsharmaGG/mergejudge-free-test
+2026-10-29T17:23:20.3994675Z ##[group]Getting Git version info
+2026-10-29T17:23:20.3996288Z Working directory is '/home/runner/work/mergejudge-free-test/mergejudge-free-test'
+2026-10-29T17:23:20.3997758Z [command]/usr/bin/git version
+2026-10-29T17:23:20.4059987Z git version 2.56.0
+2026-10-29T17:23:20.4089095Z ##[endgroup]
+2026-10-29T17:23:20.4115220Z Temporarily overriding HOME='/home/runner/work/_temp/5029ad73-cbae-4346-ab51-de95e42cfa2f' before making global git config changes
+2026-10-29T17:23:20.4118712Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-29T17:23:20.4121473Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/mergejudge-free-test/mergejudge-free-test
+2026-10-29T17:23:20.4188346Z Deleting the contents of '/home/runner/work/mergejudge-free-test/mergejudge-free-test'
+2026-10-29T17:23:20.4198862Z ##[group]Initializing the repository
+2026-10-29T17:23:20.4209865Z [command]/usr/bin/git init /home/runner/work/mergejudge-free-test/mergejudge-free-test
+2026-10-29T17:23:20.4313634Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-10-29T17:23:20.4316206Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-10-29T17:23:20.4318195Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-10-29T17:23:20.4319773Z hint: call:
+2026-10-29T17:23:20.4320611Z hint:
+2026-10-29T17:23:20.4321689Z hint: 	git config --global init.defaultBranch <name>
+2026-10-29T17:23:20.4323289Z hint:
+2026-10-29T17:23:20.4324858Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-10-29T17:23:20.4326804Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-10-29T17:23:20.4328706Z hint:
+2026-10-29T17:23:20.4331392Z hint: 	git branch -m <name>
+2026-10-29T17:23:20.4333133Z hint:
+2026-10-29T17:23:20.4334648Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-10-29T17:23:20.4338605Z Initialized empty Git repository in /home/runner/work/mergejudge-free-test/mergejudge-free-test/.git/
+2026-10-29T17:23:20.4342423Z [command]/usr/bin/git remote add origin https://github.com/gauravsharmaGG/mergejudge-free-test
+2026-10-29T17:23:20.4389729Z ##[endgroup]
+2026-10-29T17:23:20.4390993Z ##[group]Disabling automatic garbage collection
+2026-10-29T17:23:20.4394092Z [command]/usr/bin/git config --local gc.auto 0
+2026-10-29T17:23:20.4434489Z ##[endgroup]
+2026-10-29T17:23:20.4435709Z ##[group]Setting up auth
+2026-10-29T17:23:20.4443520Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-29T17:23:20.4496397Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-29T17:23:20.4987988Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-29T17:23:20.5057446Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-29T17:23:20.5345170Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-29T17:23:20.5393402Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-29T17:23:20.5685000Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-10-29T17:23:20.5750250Z ##[endgroup]
+2026-10-29T17:23:20.5751234Z ##[group]Fetching the repository
+2026-10-29T17:23:20.5771023Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +9fdc074d80ec6e9049a807266b2b619624c45f8a:refs/remotes/pull/12/merge
+2026-10-29T17:23:20.8075211Z From https://github.com/gauravsharmaGG/mergejudge-free-test
+2026-10-29T17:23:20.8077613Z  * [new ref]         9fdc074d80ec6e9049a807266b2b619624c45f8a -> pull/12/merge
+2026-10-29T17:23:20.8081872Z ##[endgroup]
+2026-10-29T17:23:20.8083997Z ##[group]Determining the checkout info
+2026-10-29T17:23:20.8086154Z ##[endgroup]
+2026-10-29T17:23:20.8092626Z [command]/usr/bin/git sparse-checkout disable
+2026-10-29T17:23:20.8157646Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-10-29T17:23:20.8206775Z ##[group]Checking out the ref
+2026-10-29T17:23:20.8210759Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/12/merge
+2026-10-29T17:23:20.8268437Z Note: switching to 'refs/remotes/pull/12/merge'.
+2026-10-29T17:23:20.8269327Z 
+2026-10-29T17:23:20.8270235Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-10-29T17:23:20.8271879Z changes and commit them, and you can discard any commits you make in this
+2026-10-29T17:23:20.8273272Z state without impacting any branches by switching back to a branch.
+2026-10-29T17:23:20.8273896Z 
+2026-10-29T17:23:20.8274385Z If you want to create a new branch to retain commits you create, you may
+2026-10-29T17:23:20.8275362Z do so (now or later) by using -c with the switch command. Example:
+2026-10-29T17:23:20.8276201Z 
+2026-10-29T17:23:20.8276455Z   git switch -c <new-branch-name>
+2026-10-29T17:23:20.8276841Z 
+2026-10-29T17:23:20.8277085Z Or undo this operation with:
+2026-10-29T17:23:20.8277434Z 
+2026-10-29T17:23:20.8277815Z   git switch -
+2026-10-29T17:23:20.8278333Z 
+2026-10-29T17:23:20.8278855Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-10-29T17:23:20.8279478Z 
+2026-10-29T17:23:20.8280201Z HEAD is now at 9fdc074 Merge 69a8e219066095da1d1d546ed9ba7d6a133756cd into af09d2f956b242019b8c45c12ed6b75c518f0d18
+2026-10-29T17:23:20.8282583Z ##[endgroup]
+2026-10-29T17:23:20.8335439Z [command]/usr/bin/git log -1 --format=%H
+2026-10-29T17:23:20.8371545Z 9fdc074d80ec6e9049a807266b2b619624c45f8a
+2026-10-29T17:23:20.8711566Z ##[group]Run actions/setup-node@v4
+2026-10-29T17:23:20.8712254Z with:
+2026-10-29T17:23:20.8712917Z   node-version: 22
+2026-10-29T17:23:20.8796914Z   always-auth: false
+2026-10-29T17:23:20.8797573Z   check-latest: false
+2026-10-29T17:23:20.8802359Z   token: ***
+2026-10-29T17:23:20.8803351Z ##[endgroup]
+2026-10-29T17:23:21.0392026Z (node:2312) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-29T17:23:21.0394461Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-29T17:23:21.0396503Z Found in cache @ /opt/hostedtoolcache/node/22.23.4/x64
+2026-10-29T17:23:21.0398312Z ##[group]Environment details
+2026-10-29T17:23:21.5179465Z node: v22.23.4
+2026-10-29T17:23:21.5180856Z npm: 10.9.9
+2026-10-29T17:23:21.5181860Z yarn: 1.22.22
+2026-10-29T17:23:21.5184886Z ##[endgroup]
+2026-10-29T17:23:21.5399332Z ##[group]Run npm run lint
+2026-10-29T17:23:21.5400767Z [36;1mnpm run lint[0m
+2026-10-29T17:23:21.5435143Z shell: /usr/bin/bash -e {0}
+2026-10-29T17:23:21.5436411Z ##[endgroup]
+2026-10-29T17:23:21.6561302Z 
+2026-10-29T17:23:21.6568231Z > lint
+2026-10-29T17:23:21.6569607Z > node scripts/lint.mjs
+2026-10-29T17:23:21.6570443Z 
+2026-10-29T17:23:21.6910702Z src/max.js:12: use let or const, not var
+2026-10-29T17:23:21.6913758Z lint: 1 problem(s)
+2026-10-29T17:23:21.7061242Z ##[error]Process completed with exit code 1.
+2026-10-29T17:23:21.7389348Z Post job cleanup.
+2026-10-29T17:23:21.8358456Z [command]/usr/bin/git version
+2026-10-29T17:23:21.8405419Z git version 2.56.0
+2026-10-29T17:23:21.8486081Z Temporarily overriding HOME='/home/runner/work/_temp/9eb1bccc-02a6-4895-b0ca-13692bf41b09' before making global git config changes
+2026-10-29T17:23:21.8491832Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-29T17:23:21.8497286Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/mergejudge-free-test/mergejudge-free-test
+2026-10-29T17:23:21.8546865Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-29T17:23:21.8593624Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-29T17:23:21.8888697Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-29T17:23:21.8920358Z http.https://github.com/.extraheader
+2026-10-29T17:23:21.8934746Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-10-29T17:23:21.8985143Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-29T17:23:21.9379945Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-29T17:23:21.9443961Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-29T17:23:21.9906561Z Cleaning up orphan processes
+2026-10-29T17:23:22.0551560Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-node@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

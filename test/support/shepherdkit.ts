@@ -87,6 +87,8 @@ export interface GhState {
   calls: string[];
   reruns: number[];
   headCommit?: { message: string; files: string[] };
+  /** Completed workflow runs of the repo (listWorkflowRunsForRepo). */
+  runs?: { id: number; name: string; path?: string; workflow_id?: number; conclusion: string | null; status?: string; head_sha: string; run_attempt?: number }[];
   /** Called right after a comment is created (a test can slip a rival's comment in here to simulate a race). */
   onCreate?: (id: number) => void;
 }
@@ -150,13 +152,14 @@ export function fakeGh(repo: Repo3, over: Partial<GhState> = {}) {
         return { data: { jobs: st.jobs.map(({ log: _l, ...j }) => j) } };
       },
       downloadJobLogsForWorkflowRun: async (p: { job_id: number }) => ({ data: st.jobs.find((j) => j.id === p.job_id)?.log ?? "" }),
+      listWorkflowRunsForRepo: async (p: { head_sha?: string }) => { log("listRuns"); return { data: { workflow_runs: (st.runs ?? []).filter((r) => !p.head_sha || r.head_sha === p.head_sha) } }; },
       reRunWorkflowFailedJobs: async (p: { run_id: number }) => { log("rerun"); st.reruns.push(p.run_id); return { data: {} }; },
     },
   };
   const paginate = async (fn: (p: unknown) => Promise<{ data: unknown }>, params: unknown) => {
     const d = (await fn(params)).data as Record<string, unknown> | unknown[];
     if (Array.isArray(d)) return d;
-    return (d.jobs ?? d.check_runs ?? []) as unknown[];
+    return (d.jobs ?? d.check_runs ?? d.workflow_runs ?? []) as unknown[];
   };
   const ok = { rest, paginate } as unknown as ShepherdCtx["ok"];
   return { ok, st, pull };

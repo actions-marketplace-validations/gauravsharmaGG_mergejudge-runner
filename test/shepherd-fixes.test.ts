@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { addEntry, addGrant, newShepherdState, parseShepherdState, readShepherdState, renderShepherdComment, type ShepherdState } from "../core/shepherd.js";
-import { runShepherd, type ShepherdPayload } from "../src/shepherd.js";
-import { fakeGh, git, handoffs, makeCtx, makeRepo, stateComment, type Repo3 } from "./support/shepherdkit.js";
+import { buildCommitMessage, extractFailureSection, fingerprintFailure, tailLog } from "../core/shepherdfail.js";
+import { redactLog, runShepherd, type ShepherdPayload } from "../src/shepherd.js";
+import { failLog, fakeGh, git, handoffs, makeCtx, makeRepo, stateComment, textProvider, wr, type Repo3 } from "./support/shepherdkit.js";
 
 const dirty = (repo: Repo3) => git(repo.ws, "status", "--porcelain");
 const sync: ShepherdPayload = { action: "synchronize", pull_request: { number: 7 } };
@@ -214,6 +215,110 @@ describe("base branch moved: sweep", () => {
     await s.run("push", push());
     expect(s.tip("b")).not.toBe(b);
     expect(s.ctx.lines.join("\n")).toContain("Sweep of #11 failed");
+  });
+});
+
+// ---------------- retry re-checks the outstanding CI failure ----------------
+
+describe("retry re-checks the outstanding CI failure", () => {
+  const LOG = failLog("TypeError: boom is not a function");
+  const fpOf = (log: string) => fingerprintFailure("test", redactLog(tailLog(extractFailureSection(log), 200, 20_000))).hash;
+  const RETRY = "/mergejudge shepherd retry";
+  const text = (src: string) => JSON.stringify({ files: [{ path: "src/a.ts", content: src }], explanation: "fix" });
+  /** One earlier attempt (cap 1) carrying `fps`, then a human commit on top; the CI run on that head failed. */
+  function stopped(fps: string[], conclusion = "failure", calls = { n: 0 }) {
+    const repo = makeRepo({ "src/a.ts": "export const a = 1;\n", "src/keep.ts": "export const k = 1;\n" });
+    repo.commit("feature", { "src/keep.ts": "export const k = 2;\n" }, buildCommitMessage({ subject: "shepherd: fix test (attempt 1/1)", attempt: 1, kind: "ci", fingerprints: fps, failures: 1 }));
+    repo.commit("feature", { "src/a.ts": "export const a = 2;\n" }, "human: change a");
+    const gh = fakeGh(repo, { jobs: [{ id: 1, name: "test", conclusion: "failure", log: LOG }] });
+    gh.st.runs = [{ id: 100, name: "CI", workflow_id: 1, conclusion, head_sha: repo.tip("feature"), run_attempt: 1 }];
+    const ctx = makeCtx(repo, gh, { provider: textProvider(text("export const a = 3;\n"), calls) }, "shepherd:\n  max_attempts: 1\n");
+    return { repo, gh, ctx, calls, run: (p: ShepherdPayload, ev = "workflow_run") => runShepherd(ctx, ev, p) };
+  }
+  const tipMsg = (repo: Repo3) => git(repo.bare, "log", "-1", "--format=%B", "refs/heads/feature");
+
+  it("after an L1 stop with a known failure, a retry pushes one fix attempt", async () => {
+    const s = stopped([fpOf(LOG)]);
+    await s.run(wr(s.gh, { run_attempt: 1 }));
+    expect(handoffs(s.gh.st)).toHaveLength(1);
+    expect(handoffs(s.gh.st)[0]!.body).toContain("Loop breaker L1");
+    expect(s.gh.st.labels.has("needs-human")).toBe(true);
+    const before = s.repo.tip("feature");
+    await s.run(cmd("/mergejudge shepherd retry", 5), "issue_comment");
+    expect(s.repo.tip("feature")).not.toBe(before);
+    expect(tipMsg(s.repo)).toContain("MergeJudge-Shepherd: attempt 2");
+    expect(tipMsg(s.repo)).toContain("(attempt 2/2)");
+    expect(s.calls.n).toBe(1);
+    expect(s.gh.st.reruns).toEqual([]);
+    expect(s.gh.st.labels.has("needs-human")).toBe(false);
+    const st = parseShepherdState(stateComment(s.gh.st)!.body)!;
+    expect(st.grants).toBe(1);
+    expect(st.entries.map((e) => e.what)).toContainEqual(expect.stringContaining("is still failing on the head"));
+    const row = st.entries.find((e) => e.what.includes("is still failing"))!;
+    expect(row.run).toBe("https://github.com/o/r/actions/runs/100");
+    expect(st.entries.at(-1)).toMatchObject({ kind: "ci", run: "https://github.com/o/r/actions/runs/100", commit: s.repo.tip("feature") });
+  });
+
+  it("a second retry command for the same failure is not needed: one retry gives exactly one attempt", async () => {
+    const s = stopped([fpOf(LOG)]);
+    await s.run(wr(s.gh, { run_attempt: 1 }));
+    await s.run(cmd(RETRY, 5), "issue_comment");
+    expect(s.calls.n).toBe(1);
+    await s.run(cmd(RETRY, 5), "issue_comment");
+    expect(s.calls.n).toBe(1);
+  });
+
+  it("a retry with an unknown failure re-runs the failed jobs instead of fixing", async () => {
+    const s = stopped(["abcdef0123"]);
+    await s.run(wr(s.gh, { run_attempt: 1 }));
+    expect(handoffs(s.gh.st)[0]!.body).toContain("Loop breaker L1");
+    const before = s.repo.tip("feature");
+    await s.run(cmd(RETRY, 5), "issue_comment");
+    expect(s.gh.st.reruns).toEqual([100]);
+    expect(s.repo.tip("feature")).toBe(before);
+    expect(s.calls.n).toBe(0);
+    const st = parseShepherdState(stateComment(s.gh.st)!.body)!;
+    expect(st.entries.at(-1)).toMatchObject({ result: expect.stringContaining("Re-running failed jobs"), run: "https://github.com/o/r/actions/runs/100" });
+    // The re-run's own workflow_run event (attempt 2) is then handled normally and fixes it.
+    await s.run(wr(s.gh, { run_attempt: 2 }));
+    expect(tipMsg(s.repo)).toContain("MergeJudge-Shepherd: attempt 2");
+  });
+
+  it("a retry on a green head runs only the conflict check", async () => {
+    const s = stopped([fpOf(LOG)], "success");
+    s.gh.st.mergeable = true;
+    await s.run(wr(s.gh, { conclusion: "success" }));
+    const before = s.repo.tip("feature");
+    await s.run(cmd(RETRY, 5), "issue_comment");
+    expect(s.repo.tip("feature")).toBe(before);
+    expect(s.gh.st.reruns).toEqual([]);
+    expect(s.calls.n).toBe(0);
+    expect(s.gh.st.calls).toContain("listRuns");
+    expect(handoffs(s.gh.st)).toHaveLength(0);
+    expect(parseShepherdState(stateComment(s.gh.st)!.body)!.entries.map((e) => e.what)).not.toContainEqual(expect.stringContaining("still failing"));
+  });
+
+  it("a newer green run of the same workflow, a cancelled run and Shepherd's own failed run are not outstanding failures", async () => {
+    const s = stopped([fpOf(LOG)]);
+    const sha = s.repo.tip("feature");
+    s.gh.st.runs = [
+      { id: 100, name: "CI", workflow_id: 1, conclusion: "failure", head_sha: sha },
+      { id: 101, name: "CI", workflow_id: 1, conclusion: "success", head_sha: sha },
+      { id: 102, name: "Lint", workflow_id: 2, conclusion: "cancelled", head_sha: sha },
+      { id: 103, name: "Shepherd", workflow_id: 3, conclusion: "failure", head_sha: sha },
+      { id: 104, name: "Elsewhere", workflow_id: 4, conclusion: "failure", head_sha: "f".repeat(40) },
+    ];
+    const before = s.repo.tip("feature");
+    await s.run(cmd(RETRY, 5), "issue_comment");
+    expect(s.repo.tip("feature")).toBe(before);
+    expect(s.gh.st.reruns).toEqual([]);
+    expect(s.calls.n).toBe(0);
+  });
+
+  it("a plain /mergejudge shepherd (no retry) does not look at failed runs", async () => {
+    const s = stopped([fpOf(LOG)]);
+    await s.run(cmd("/mergejudge shepherd", 6), "issue_comment");
+    expect(s.gh.st.calls).not.toContain("listRuns");
   });
 });
 

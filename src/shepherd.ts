@@ -387,7 +387,41 @@ async function turnOn(c: ShepherdCtx, pr: PullLite, actor: string, how: "on" | "
     return;
   }
   await conflictCheck(c, pr);
+  if (how === "retry") await recheckFailedRun(c, pr);
 }
+
+/**
+ * After a retry grant: pick up the CI failure that is still outstanding on the head. Only when the PR is open, Shepherd is on
+ * (label, no needs-human, state on) and the head sha is unchanged (a conflict resolution that moved it starts new CI anyway).
+ * The latest completed failed run of each workflow on the head counts (a newer green run of the same workflow clears it);
+ * Shepherd's own workflow is never looked at (rule 7). The run then goes through the normal decide() and act(): a failure
+ * Shepherd already knows (fingerprint in the state or trailers, or its failed jobs were already re-run) is decided at once
+ * under every loop breaker, with the new grant allowing the fix attempt; a new one gets the usual flaky-test re-run first.
+ * With no failed run on the head nothing happens beyond the conflict check.
+ */
+async function recheckFailedRun(c: ShepherdCtx, before: PullLite): Promise<void> {
+  const pr = await loadPull(c, before.number);
+  if (pr.state !== "open" || !hasLabel(pr, SHEPHERD_LABEL) || hasLabel(pr, NEEDS_HUMAN_LABEL) || pr.head.sha !== before.head.sha) return;
+  const state = await readState(c, pr.number);
+  if (!state?.on) return;
+  const runs = await c.ok.paginate(c.ok.rest.actions.listWorkflowRunsForRepo, { ...c.repo, head_sha: pr.head.sha, status: "completed", per_page: 100 });
+  const mine = (r: { name?: string | null; path?: string }) => (!!c.self?.name && r.name === c.self.name) || (!!r.path && !!c.self?.ref?.includes(r.path));
+  const latest = new Map<string, (typeof runs)[number]>();
+  for (const r of runs) {
+    if (mine(r)) continue;
+    const key = String(r.workflow_id ?? r.name);
+    if (!latest.has(key) || r.id > latest.get(key)!.id) latest.set(key, r);
+  }
+  const failed = [...latest.values()].filter((r) => r.conclusion && RETRY_RECHECK.has(r.conclusion)).sort((a, b) => b.id - a.id)[0];
+  if (!failed) { c.log.info(`#${pr.number}: no failed run on the head ${pr.head.sha.slice(0, 7)} to re-check after the retry.`); return; }
+  const runUrl = `${repoUrl(c)}/actions/runs/${failed.id}`;
+  c.log.info(`#${pr.number}: re-checking the failed run ${failed.id} after the retry.`);
+  const hist = await history(c, pr.number);
+  await note(c, pr.number, hist, { kind: "ci", what: `Run ${failed.name ?? failed.id} is still failing on the head`, changed: "nothing yet", result: "Retry: Shepherd looks at this failed run again", commit: pr.head.sha, run: runUrl });
+  await evaluateFailedRun(c, pr, { id: failed.id, conclusion: failed.conclusion!, attempt: failed.run_attempt ?? 1 }, await readState(c, pr.number), hist, false);
+}
+/** Conclusions a retry re-checks: a cancelled run was stopped on purpose (a newer push or a person), so it is not an outstanding failure. */
+const RETRY_RECHECK = new Set(["failure", "timed_out", "startup_failure"]);
 
 // ---------------- checks on the head (L4 baseline) ----------------
 

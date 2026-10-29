@@ -1,0 +1,61 @@
+# MergeJudge Shepherd (tier 2): watch a PR and push small fixes for failed CI and real merge conflicts.
+# Copy to .github/workflows/shepherd.yml in your repo. Change "CI" to the name of the workflow(s) you want watched.
+#
+# Turn it on per PR with the comment `/mergejudge shepherd` or the `shepherd` label. It never merges.
+name: Shepherd
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request:
+    types: [labeled, unlabeled, synchronize]
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+  # A finished external status (a deploy preview, a third-party CI) lets Shepherd decide on a failure it was holding back
+  # while checks were still pending. Pending statuses are ignored.
+  status:
+
+# contents: write to push fixes, pull-requests/issues for labels and comments,
+# checks and actions: read to see failures, actions: write only so Shepherd can re-run a failed job once to rule out a flaky test.
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  checks: read
+  actions: write
+
+concurrency:
+  group: shepherd-${{ github.event.pull_request.number || github.event.issue.number || github.event.workflow_run.head_branch || github.event.sha }}
+  cancel-in-progress: false
+
+jobs:
+  shepherd:
+    runs-on: ubuntu-latest
+    # Same-repo branches only: fork PRs never run Shepherd (no fork code is checked out and no secrets are exposed).
+    if: >-
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request) ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.head_repository.full_name == github.repository) ||
+      (github.event_name == 'status' && github.event.state != 'pending')
+    steps:
+      # Check out the PR branch with full history. For comment events there is no PR ref, so Shepherd fetches the branch itself.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gauravsharmaGG/mergejudge-runner@v1
+        with:
+          mode: shepherd
+          # Pushes made with the default GITHUB_TOKEN do not start new workflow runs (a GitHub rule), so CI will not
+          # re-run after a fix. Pass a GitHub App token (app_id and app_private_key) or a token secret so it does.
+          # Shepherd caps its attempts either way.
+          github_token: ${{ secrets.SHEPHERD_TOKEN || github.token }}
+          # app_id: ${{ vars.MERGEJUDGE_APP_ID }}
+          # app_private_key: ${{ secrets.MERGEJUDGE_APP_KEY }}
+          # Optional: run a formatter or fixer first. If it changes files, that diff is the fix and no model is called.
+          # shepherd_fix_command: npm run lint -- --fix
+          provider: anthropic
+          model: claude-sonnet-4-20250514
+          api_key_env: AI_API_KEY
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}

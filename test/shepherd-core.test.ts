@@ -18,6 +18,7 @@ const root = join(import.meta.dirname, "..");
 const cfg = parseConfig("");
 
 describe("rule IDs", () => {
+  it("the L1 question offers /mergejudge shepherd retry", () => expect(RULE_QUESTION.L1).toContain("`/mergejudge shepherd retry`"));
   it("every rule has a title and a single question", () => {
     for (const id of Object.values(RULE)) {
       expect(RULE_TITLE[id]).toContain(id);
@@ -165,6 +166,12 @@ describe("decide()", () => {
     expect(d({ history: h(2), failures: [fp("new")] }).action).toBe("fix");
     expect(d({ history: h(4), failures: [fp("new", 2)] }).action).toBe("fix");
     expect(d({ history: h(3), failures: [fp("new", 2)] })).toMatchObject({ rule: RULE.L4 });
+  });
+  it("L1: grants raise the cap by exactly their number", () => {
+    const h = hist(rec("a", 1, ["x"], 5), rec("b", 2, ["y"], 4), rec("c", 3, ["z"], 3));
+    expect(d({ history: h, grants: 1 })).toEqual({ action: "fix", attempt: 4 });
+    expect(d({ history: hist(...h.records, rec("d", 4, ["w"], 2)), grants: 1 })).toMatchObject({ action: "handoff", rule: RULE.L1, reason: expect.stringContaining("4/4") });
+    expect(d({ history: h, grants: 0 })).toMatchObject({ rule: RULE.L1 });
   });
   it("H3: cant-fix hands off before any attempt", () => {
     expect(d({ cantFix: { kind: "cant-fix", reason: "missing secret", rule: RULE.H3 } })).toMatchObject({ action: "handoff", rule: RULE.H3 });

@@ -5,12 +5,19 @@ import type { Octokit, Repo } from "./github.js";
 import { escapeMd } from "./render.js";
 import { isMergeJudgeConfigPath } from "./rules.js";
 import { redact } from "../src/redact.js";
+import { effectiveCap } from "./shepherdrules.js";
 
 /** Label that turns Shepherd on for a PR (adding) or off (removing). */
 export const SHEPHERD_LABEL = "shepherd";
 export const SHEPHERD_MARKER = "<!-- mergejudge:shepherd";
 /** The state comment only: the hand-off comment's marker (`<!-- mergejudge:shepherd-handoff -->`) starts with SHEPHERD_MARKER too. */
 export const isStateComment = (body: string | null | undefined): boolean => /<!-- mergejudge:shepherd [^\s>-]/.test(body ?? "");
+/**
+ * A state comment Shepherd can trust: written by a bot, and by Shepherd's own bot login when that is known (an App slug).
+ * Without a known login only the Bot account type is checked.
+ */
+export const isOwnStateComment = (c: { body?: string | null; user?: { type?: string; login?: string } | null }, selfLogin?: string | null): boolean =>
+  isStateComment(c.body) && c.user?.type === "Bot" && (!selfLogin || c.user.login === selfLogin);
 export const MAX_ENTRIES = 20;
 const FIELD_MAX = 300;
 
@@ -47,9 +54,9 @@ export function isProtectedPath(path: string, cfg: ShepherdCfg): boolean {
 /** The subset of `paths` Shepherd must not edit. */
 export const protectedHits = (paths: string[], cfg: ShepherdCfg): string[] => paths.filter((p) => isProtectedPath(p, cfg));
 
-/** Comment command: "on" for `/mergejudge shepherd [on]`, "off" for `/mergejudge shepherd off`. Quoted lines and fenced code are ignored; the last command wins. */
-export function parseShepherdCommand(body: string | null | undefined): "on" | "off" | null {
-  let out: "on" | "off" | null = null;
+/** Comment command: "on" for `/mergejudge shepherd [on]`, "off" for `/mergejudge shepherd off`, "retry" for `/mergejudge shepherd retry`. Quoted lines and fenced code are ignored; the last command wins. */
+export function parseShepherdCommand(body: string | null | undefined): "on" | "off" | "retry" | null {
+  let out: "on" | "off" | "retry" | null = null;
   let fence: string | null = null;
   for (const line of (body ?? "").split(/\r?\n/)) {
     const f = line.match(/^\s*(`{3,}|~{3,})/);
@@ -59,8 +66,8 @@ export function parseShepherdCommand(body: string | null | undefined): "on" | "o
       continue;
     }
     if (fence) continue;
-    const m = line.match(/^\s*\/mergejudge\s+shepherd(?:\s+(on|off))?\s*$/i);
-    if (m) out = m[1]?.toLowerCase() === "off" ? "off" : "on";
+    const m = line.match(/^\s*\/mergejudge\s+shepherd(?:\s+(on|off|retry))?\s*$/i);
+    if (m) out = m[1] ? (m[1].toLowerCase() as "on" | "off" | "retry") : "on";
   }
   return out;
 }
@@ -87,11 +94,16 @@ export interface ShepherdEntry {
   /** Failure fingerprints this step set out to fix (mirror of the commit trailers; the commits are authoritative). */
   fingerprints?: string[];
 }
+/** One `/mergejudge shepherd retry`: who granted the extra attempt and when. `comment` is the command comment's id (a re-run of the same event grants nothing twice). */
+export interface ShepherdGrant { who: string; at: string; comment?: number }
 export interface ShepherdState {
   v: 1;
   on: boolean;
   attempts: number;
   maxAttempts: number;
+  /** Extra attempts humans granted with `/mergejudge shepherd retry`; the cap is `maxAttempts + grants`. */
+  grants: number;
+  grantLog: ShepherdGrant[];
   status: ShepherdStatus;
   entries: ShepherdEntry[];
 }
@@ -106,17 +118,27 @@ const entrySchema = z.object({
   run: z.string().regex(/^https:\/\/[^\s<>()]+$/).max(300).optional(),
   fingerprints: z.array(z.string().regex(/^[0-9a-f]{6,16}$/)).max(10).optional(),
 });
+const grantSchema = z.object({ who: z.string().max(100), at: z.string().max(40), comment: z.number().int().optional() });
 const stateSchema = z.object({
   v: z.literal(1),
   on: z.boolean(),
   attempts: z.number().int().min(0).max(1000),
   maxAttempts: z.number().int().min(1).max(10),
+  grants: z.number().int().min(0).max(1000).default(0),
+  grantLog: z.array(grantSchema).default([]),
   status: z.enum(STATUSES),
   entries: z.array(entrySchema),
 });
 
 export const newShepherdState = (maxAttempts = 3): ShepherdState =>
-  ({ v: 1, on: true, attempts: 0, maxAttempts, status: "watching", entries: [] });
+  ({ v: 1, on: true, attempts: 0, maxAttempts, grants: 0, grantLog: [], status: "watching", entries: [] });
+
+/** Record one retry grant (+1 attempt). The same command comment never grants twice. */
+export function addGrant(state: ShepherdState, g: ShepherdGrant): ShepherdState {
+  if (g.comment != null && state.grantLog.some((x) => x.comment === g.comment)) return state;
+  const who = g.who.replace(/[^A-Za-z0-9_.\[\]-]/g, "").slice(0, 100);
+  return { ...state, grants: state.grants + 1, grantLog: [...state.grantLog, { who, at: g.at, ...(g.comment != null ? { comment: g.comment } : {}) }].slice(-MAX_ENTRIES) };
+}
 
 /** Free text goes through the runner's redaction; secrets must never reach the PR comment. */
 const clean = (s: string, sanitize: (t: string) => string) => sanitize(String(s)).replace(/\s+/g, " ").trim().slice(0, FIELD_MAX);
@@ -146,15 +168,16 @@ export function parseShepherdState(body: string | null | undefined): ShepherdSta
 export function nextAttempt(state: ShepherdState): { allowed: boolean; reason: string } {
   if (!state.on || state.status === "off") return { allowed: false, reason: "Shepherd is off for this PR." };
   if (state.status === "protected") return { allowed: false, reason: "A fix needs a protected path; a human must make it." };
-  if (state.attempts >= state.maxAttempts) return { allowed: false, reason: `Retry limit reached (${state.attempts}/${state.maxAttempts}).` };
-  return { allowed: true, reason: `Attempt ${state.attempts + 1} of ${state.maxAttempts}.` };
+  const cap = effectiveCap(state.maxAttempts, state.grants);
+  if (state.attempts >= cap) return { allowed: false, reason: `Retry limit reached (${state.attempts}/${cap}).` };
+  return { allowed: true, reason: `Attempt ${state.attempts + 1} of ${cap}.` };
 }
 
 /** Count one fix attempt, or move to "limit" when none is left. */
 export function startAttempt(state: ShepherdState): ShepherdState {
   const n = nextAttempt(state);
   if (n.allowed) return { ...state, attempts: state.attempts + 1, status: "fixing" };
-  return state.on && state.status !== "protected" && state.attempts >= state.maxAttempts ? { ...state, status: "limit" } : state;
+  return state.on && state.status !== "protected" && state.attempts >= effectiveCap(state.maxAttempts, state.grants) ? { ...state, status: "limit" } : state;
 }
 
 // ---------------- comment ----------------
@@ -179,7 +202,7 @@ export function renderShepherdComment(state: ShepherdState, repoUrl: string): st
     "MergeJudge watches this PR and keeps fixing it until checks and review pass.",
     "",
     `**Status:** ${STATUS_TEXT[state.status]}  `,
-    `**Fix attempts:** ${state.attempts}/${state.maxAttempts}`,
+    `**Fix attempts:** ${state.attempts}/${effectiveCap(state.maxAttempts, state.grants)}${state.grants ? ` (+${state.grants} granted)` : ""}`,
     "",
   ];
   if (state.entries.length) {
@@ -208,10 +231,10 @@ export function renderShepherdComment(state: ShepherdState, repoUrl: string): st
  * like the sticky summary comment.
  */
 export async function upsertShepherdComment(
-  ok: Octokit, r: Repo, pull: number, next: ShepherdState | ((prev: ShepherdState | null) => ShepherdState),
+  ok: Octokit, r: Repo, pull: number, next: ShepherdState | ((prev: ShepherdState | null) => ShepherdState), selfLogin?: string | null,
 ): Promise<ShepherdState> {
   const comments = await ok.paginate(ok.rest.issues.listComments, { ...r, issue_number: pull, per_page: 100 });
-  const existing = comments.find((c) => isStateComment(c.body) && c.user?.type === "Bot");
+  const existing = comments.find((c) => isOwnStateComment(c, selfLogin));
   const state = typeof next === "function" ? next(parseShepherdState(existing?.body)) : next;
   const body = renderShepherdComment(state, `https://github.com/${r.owner}/${r.repo}`);
   if (existing) await ok.rest.issues.updateComment({ ...r, comment_id: existing.id, body });

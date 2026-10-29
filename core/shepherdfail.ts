@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { RULE, RULE_QUESTION, type RuleId } from "./shepherdrules.js";
+import { RULE, RULE_QUESTION, effectiveCap, type RuleId } from "./shepherdrules.js";
 
 // ---------------- error fingerprint ----------------
 
@@ -242,6 +242,8 @@ export interface DecideInput {
   /** Shepherd is on for the PR (label) and the repo allows it. */
   on: boolean;
   maxAttempts: number;
+  /** Attempts granted with `/mergejudge shepherd retry`; the cap is `maxAttempts + grants`. */
+  grants?: number;
   history: ShepherdHistory;
   /** Head sha the workflow run was for (already checked to equal the PR head). */
   headSha: string;
@@ -272,6 +274,7 @@ export function decide(i: DecideInput): Decision {
   }
   if (i.cantFix.kind === "cant-fix") return hand(i.cantFix.rule, `not a code problem: ${i.cantFix.reason}`);
 
+  const cap = effectiveCap(i.maxAttempts, i.grants);
   const latest = i.history.latest;
   const postFix = !!latest && latest.sha === i.headSha;
   const known = new Set([...i.history.records.flatMap((r) => r.fingerprints), ...(i.stateFingerprints ?? [])]);
@@ -282,13 +285,13 @@ export function decide(i: DecideInput): Decision {
     const back = current.filter((h) => known.has(h));
     if (back.length) return hand(RULE.L3, `the fix brought back an earlier failure (fingerprint ${back[0]}) seen in an earlier attempt`);
   }
-  if (i.runAttempt === 1 && !i.rerunRequested && current.some((h) => !known.has(h)) && i.history.attempts < i.maxAttempts)
+  if (i.runAttempt === 1 && !i.rerunRequested && current.some((h) => !known.has(h)) && i.history.attempts < cap)
     return { action: "rerun", reason: "re-running failed jobs to rule out a flaky test" };
   if (postFix && latest?.failures != null) {
     const now = failureCount(i.failures);
     if (now >= latest.failures) return hand(RULE.L4, `the fix did not reduce the failures (${latest.failures} before, ${now} now)`);
   }
-  if (i.history.attempts >= i.maxAttempts) return hand(RULE.L1, `all ${i.maxAttempts} fix attempts are used (${i.history.attempts}/${i.maxAttempts})`);
+  if (i.history.attempts >= cap) return hand(RULE.L1, `all ${cap} fix attempts are used (${i.history.attempts}/${cap})`);
   return { action: "fix", attempt: i.history.attempts + 1 };
 }
 

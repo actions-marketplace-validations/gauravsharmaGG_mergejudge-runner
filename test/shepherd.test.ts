@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseConfig } from "../core/config.js";
 import {
-  addEntry, isProtectedPath, isShepherdOn, newShepherdState, nextAttempt, parseShepherdCommand, parseShepherdState,
+  addEntry, addGrant, isOwnStateComment, isProtectedPath, isShepherdOn, newShepherdState, nextAttempt, parseShepherdCommand, parseShepherdState,
   protectedHits, renderShepherdComment, startAttempt, upsertShepherdComment, SHEPHERD_LABEL,
 } from "../core/shepherd.js";
 import { findingText, inlineBody, parseMarker, planInline } from "../core/inline.js";
@@ -37,6 +37,54 @@ describe("shepherd command and label", () => {
     expect(isShepherdOn(["shepherd"])).toBe(true);
     expect(isShepherdOn([{ name: "bug" }])).toBe(false);
     expect(isShepherdOn(undefined)).toBe(false);
+  });
+});
+
+describe("shepherd retry command and grants", () => {
+  it("parses retry with the same case, whitespace, quote and fence rules", () => {
+    expect(parseShepherdCommand("/mergejudge shepherd retry")).toBe("retry");
+    expect(parseShepherdCommand("  /MergeJudge Shepherd RETRY  \n")).toBe("retry");
+    expect(parseShepherdCommand("ok\n/mergejudge shepherd retry\nthanks")).toBe("retry");
+    expect(parseShepherdCommand("> /mergejudge shepherd retry")).toBeNull();
+    expect(parseShepherdCommand("```\n/mergejudge shepherd retry\n```")).toBeNull();
+    expect(parseShepherdCommand("please /mergejudge shepherd retry")).toBeNull();
+    expect(parseShepherdCommand("/mergejudge shepherd retry now")).toBeNull();
+    expect(parseShepherdCommand("/mergejudge shepherd retries")).toBeNull();
+    expect(parseShepherdCommand("/mergejudge shepherd retry\n/mergejudge shepherd off")).toBe("off");
+    expect(parseShepherdCommand("/mergejudge shepherd off\n```\nx\n```\n/mergejudge shepherd retry")).toBe("retry");
+  });
+  it("an old state comment without grants parses as 0 grants", () => {
+    const old = { v: 1, on: true, attempts: 1, maxAttempts: 3, status: "watching", entries: [] };
+    const s = parseShepherdState(`<!-- mergejudge:shepherd ${encodeURIComponent(JSON.stringify(old))} -->`);
+    expect(s).toMatchObject({ grants: 0, grantLog: [] });
+  });
+  it("each grant is +1 on the cap and is logged; the same comment never grants twice", () => {
+    let s = newShepherdState(2);
+    s = addGrant(s, { who: "maint", at: "t1", comment: 5 });
+    s = addGrant(s, { who: "maint", at: "t2", comment: 5 });
+    expect(s).toMatchObject({ grants: 1, grantLog: [{ who: "maint", at: "t1", comment: 5 }] });
+    s = addGrant(s, { who: "other<script>", at: "t3", comment: 6 });
+    expect(s.grants).toBe(2);
+    expect(s.grantLog[1]!.who).toBe("otherscript");
+    s = { ...s, attempts: 3 };
+    expect(nextAttempt(s)).toMatchObject({ allowed: true });
+    expect(nextAttempt({ ...s, attempts: 4 })).toMatchObject({ allowed: false });
+    expect(startAttempt({ ...s, attempts: 4 }).status).toBe("limit");
+  });
+  it("the comment shows attempts against the effective cap and the grants, and they round-trip", () => {
+    const s = addGrant({ ...newShepherdState(3), attempts: 3 }, { who: "m", at: "t" });
+    const body = renderShepherdComment(s, "https://github.com/o/r");
+    expect(body).toContain("**Fix attempts:** 3/4 (+1 granted)");
+    expect(parseShepherdState(body)).toEqual(s);
+    expect(renderShepherdComment(newShepherdState(3), "u")).toContain("**Fix attempts:** 0/3\n");
+  });
+  it("only trusts a state comment by Shepherd's own bot login when it is known", () => {
+    const body = renderShepherdComment(newShepherdState(), "u");
+    expect(isOwnStateComment({ body, user: { type: "Bot", login: "mj[bot]" } }, "mj[bot]")).toBe(true);
+    expect(isOwnStateComment({ body, user: { type: "Bot", login: "evil[bot]" } }, "mj[bot]")).toBe(false);
+    expect(isOwnStateComment({ body, user: { type: "User", login: "mj[bot]" } }, "mj[bot]")).toBe(false);
+    expect(isOwnStateComment({ body, user: { type: "Bot", login: "any[bot]" } }, null)).toBe(true);
+    expect(isOwnStateComment({ body: "hi", user: { type: "Bot", login: "mj[bot]" } }, "mj[bot]")).toBe(false);
   });
 });
 

@@ -40,7 +40,7 @@ export const RULE_TITLE: Record<RuleId, string> = {
 
 /** "The one decision needed from you" for each rule: a single concrete question. */
 export const RULE_QUESTION: Record<RuleId, string> = {
-  L1: "Shepherd used all its fix attempts on this PR. Will you fix the remaining failure yourself, or do you want to raise `shepherd.max_attempts` on the base branch and re-enable?",
+  L1: "Shepherd used all its fix attempts on this PR. Will you fix the remaining failure yourself, or do you want to raise `shepherd.max_attempts` on the base branch and re-enable? To allow exactly one more attempt, comment `/mergejudge shepherd retry`.",
   L2: "The last fix left the same failure in place. Can you tell what the real cause is, or should this change be reworked?",
   L3: "Fixing one failure brings back another, so the two fixes fight each other. Which of the two behaviours should win?",
   L4: "The last fix did not reduce the number of failures. Should this change be reworked, or is another approach needed?",
@@ -55,3 +55,6 @@ export const RULE_QUESTION: Record<RuleId, string> = {
 export const RULE_STATUS: Record<RuleId, "limit" | "protected" | "stopped"> = {
   L1: "limit", L2: "stopped", L3: "stopped", L4: "stopped", L5: "stopped", H1: "protected", H2: "stopped", H3: "stopped", H4: "stopped",
 };
+
+/** The fix-attempt cap of a PR: the configured budget plus the attempts humans granted with `/mergejudge shepherd retry`. */
+export const effectiveCap = (maxAttempts: number, grants = 0): number => maxAttempts + Math.max(0, grants);

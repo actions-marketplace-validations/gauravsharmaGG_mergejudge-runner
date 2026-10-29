@@ -382,6 +382,27 @@ Across all 50 pull requests, `--deep` posted 60 true positives and 19 false posi
 
 Turn the second pass on with `ai.mode: deep` in `.mergejudge.yml` on the base branch, with Action input `review_mode: deep`, or with `MERGEJUDGE_MODE=deep`. Omit it and the review stays the fast default. `auto` means low risk, not a guarantee.
 
+## Shepherd (Watch and auto-fix), beta
+
+Shepherd watches a PR and helps it get to green. It never merges or deploys: a human still merges.
+
+Turn it on for one PR with the comment `/mergejudge shepherd` or the `shepherd` label. Turn it off with `/mergejudge shepherd off` or by removing the label.
+
+**Tier 1 (free, no runner).** While Shepherd is on, MergeJudge's inline review comments can include GitHub "suggested changes" for simple one-line fixes. Click "Commit suggestion" to apply one as its own small commit. Each batch is logged in a single Shepherd comment on the PR. Findings without a verified line, and anything in a protected path, get no suggestion. With Shepherd off, reviews are unchanged.
+
+**Tier 2 (Action mode)** fixes failing CI and merge conflicts. It is coming in the next release.
+
+Guardrails: `.github/`, deploy and rollback scripts, auth and secrets files, and `.mergejudge.yml` are never edited automatically. Fix attempts are capped per PR (default 3), then Shepherd posts a summary and stops. No force-pushes.
+
+```yaml
+# .mergejudge.yml (read from the base branch)
+shepherd:
+  enabled: true         # the repo allows Shepherd to be turned on per PR
+  max_attempts: 3       # fix attempts per PR, 1-10
+  suggestions: true     # tier 1: suggested changes on review comments
+  protected_paths: []   # extra globs Shepherd never edits, added to the built-in list
+```
+
 ## Quiet by default, and requiring the check
 
 AI line comments are posted inline only when the finding includes a quote of the diff line that verifies against the PR diff. Findings without a verifiable quote are not posted inline; they are listed in the summary comment under "❔ Needs human", with a count. No config is needed.

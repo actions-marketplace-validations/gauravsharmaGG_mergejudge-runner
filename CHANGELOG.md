@@ -4,6 +4,11 @@ Release notes for `mergejudge-runner`. Versions below match `package.json`, `src
 
 `auto` means low risk, not a guarantee.
 
+## Unreleased
+
+- **Shepherd (Watch and auto-fix), beta, tier 1.** Turn it on per PR with the comment `/mergejudge shepherd` (off: `/mergejudge shepherd off`) or the `shepherd` label. While it is on, MergeJudge's inline review comments can carry GitHub "suggested changes" (single-line replacements) you apply with "Commit suggestion", and each batch is logged in one Shepherd comment on the PR. New optional `shepherd:` block in `.mergejudge.yml` (`enabled`, `max_attempts`, `protected_paths`, `suggestions`); read from the base branch. Protected paths (`.github/`, deploy and rollback scripts, auth and secrets files, `.mergejudge.yml`) never get a suggestion. With Shepherd off, prompts and review output are unchanged. Shepherd never merges. Runner/Action fixing of CI failures and merge conflicts (tier 2) comes in the next release.
+- JSON reply parsing: a reply that is already a bare JSON object is no longer cut at a ``` inside one of its strings.
+
 ## 0.6.1
 
 Published package for the 50-PR Martian evaluation (`npx mergejudge-runner@0.6.1`). Release commit: `434c979` (`release: 0.6.1 with updated npm and Marketplace AEO metadata`).

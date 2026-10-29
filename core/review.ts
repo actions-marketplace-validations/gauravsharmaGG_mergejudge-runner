@@ -20,6 +20,7 @@ import { selectCriteria } from "./rubrics.js";
 import { excludeFromLlm, isMergeJudgeConfigPath } from "./rules.js";
 import { gatherContext, type ContextPiece, type ContextSource } from "./context.js";
 import { DELIM, runTriage, type Finding, type TokenBreakdown, type TriageResult } from "./triage.js";
+import { addEntry, isProtectedPath, isShepherdOn, newShepherdState, upsertShepherdComment } from "./shepherd.js";
 import { runSecondPass } from "../src/ai.js";
 import { aiModeOf } from "../src/deep.js";
 
@@ -148,6 +149,8 @@ export interface ReviewResult {
   findings: Finding[];
   /** True when inline findings should be synced (fresh LLM result, not a cache hit). */
   syncInline: boolean;
+  /** Shepherd tier 1 was on for this review (label + config); only present when true. */
+  shepherd?: boolean;
   usage: ReviewOutcome & { tokens: number };
 }
 
@@ -224,6 +227,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
   }
 
   const labels: string[] = (pr.labels ?? []).map((l: { name: string }) => l.name);
+  const shepherdOn = isShepherdOn(labels) && cfg.shepherd.enabled && cfg.shepherd.suggestions;
 
   if (o.skipAi) notes.push(o.skipAi);
   else if (o.providerNote && cfg.provider.type !== "none") notes.push(`LLM disabled (${(!provider && o.keyNote) || o.providerNote}); rules-only.`);
@@ -301,7 +305,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
       context = g.pieces;
     }
     const prompt = { title: pr.title ?? "", body: pr.body ?? "", files: kept, context };
-    const tctx = { policyText: policies.text, criteria, learnedText: cfg.learning.enabled ? (o.learnedLines ? renderLearnedSection(o.learnedLines, DELIM) : buildLearnedContext({ learned: o.learned, lessons: o.lessons, outcomeStats: o.outcomeStats }, DELIM)) : "", skippedDiffFiles: skipped, ref: o.ref ?? `#${pr.number}` };
+    const tctx = { ...(shepherdOn ? { suggestions: (p: string) => !isProtectedPath(p, cfg) } : {}), policyText: policies.text, criteria, learnedText: cfg.learning.enabled ? (o.learnedLines ? renderLearnedSection(o.learnedLines, DELIM) : buildLearnedContext({ learned: o.learned, lessons: o.lessons, outcomeStats: o.outcomeStats }, DELIM)) : "", skippedDiffFiles: skipped, ref: o.ref ?? `#${pr.number}` };
     let res = mode === "deep" && tools && canUseTools(provider)
       ? await runDeepTriage(provider, prompt, cfg, tctx, { tools }, log.info, log.warning)
       : await runTriage(provider, prompt, cfg, tctx, log.info, log.warning);
@@ -356,7 +360,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
   });
   return {
     schemaVersion: 1, kind: "review", prNumber: number, headSha: pr.head.sha, prNodeId: pr.node_id,
-    lane: agg.lane, agg, body, findings, syncInline: !!llm && !cached,
+    lane: agg.lane, agg, body, findings, syncInline: !!llm && !cached, ...(shepherdOn ? { shepherd: true } : {}),
     usage: {
       lane: agg.lane, mode: llm && provider ? usedMode : "rules-only", model: provider?.label ?? null,
       cached: !!cached, breakdown, tokens,
@@ -408,6 +412,18 @@ export async function postReviewResult(r: ReviewResult, c: PostContext): Promise
     try {
       const plan = await syncInlineFindings(ok, repo, r.prNumber, r.headSha, r.findings, log.warning, log.info, `${r.usage.mode}:${r.usage.model ?? "rules-only"}`);
       log.info(`Inline findings: ${plan.create.length} new, ${plan.update.length} updated/resolved.`);
+      if (r.shepherd) {
+        const n = [...plan.create, ...plan.update].filter((x) => x.body.includes("```suggestion\n")).length;
+        if (n) {
+          try {
+            const at = new Date().toISOString();
+            await upsertShepherdComment(ok, repo, r.prNumber, (prev) => addEntry(
+              prev ?? newShepherdState(cfg.shepherd.max_attempts),
+              { at, kind: "suggestion", what: "Review findings with a clear one-line fix", changed: `${n} suggested change${n === 1 ? "" : "s"} posted on review comments`, result: "Waiting for a human to commit them" },
+            ));
+          } catch (e) { log.warning(`Could not update the Shepherd comment: ${(e as Error).message}`); }
+        }
+      }
     } catch (e) {
       log.warning(`Could not post inline findings: ${(e as Error).message}`);
     }

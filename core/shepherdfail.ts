@@ -147,7 +147,7 @@ export function countFailingChecks(checkRuns: CheckRunLite[], statuses: StatusLi
   return { failing, pending };
 }
 
-const GH_TS = /^(?:﻿)?\d{4}-\d\d-\d\dT[\d:.]+Z ?/;
+const GH_TS = /^(?:\uFEFF)?\d{4}-\d\d-\d\dT[\d:.]+Z ?/;
 /** Where a job's own output ends: the post-job steps and the runner epilogue. */
 const JOB_EPILOGUE = /^(?:Post job cleanup\.|Cleaning up orphan processes|Evaluate and set job outputs)/;
 const STEP_ERROR = /^##\[error\]Process completed with exit code/;

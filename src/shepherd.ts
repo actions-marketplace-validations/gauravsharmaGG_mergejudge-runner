@@ -26,7 +26,7 @@ import { HANDOFF_MARKER, NEEDS_HUMAN_LABEL, renderHandoff } from "../core/shephe
 import { RULE, RULE_QUESTION, RULE_STATUS, RULE_TITLE, effectiveCap, type RuleId } from "../core/shepherdrules.js";
 import { redact, type LogFns } from "./redact.js";
 import {
-  DEFAULT_IDENTITY, changedByPr, checkoutHead, commitStaged, incomingPaths, mergeBase, pushHead, resetClean, stageAll, stageContent, startMerge, takeTheirs, type Identity,
+  DEFAULT_IDENTITY, changedByPr, checkoutHead, commitStaged, incomingPaths, mergeBase, pushHead, refSha, resetClean, stageAll, stageContent, startMerge, takeTheirs, type Identity,
 } from "./shepherdgit.js";
 
 export interface RunResult { code: number; output: string }
@@ -155,6 +155,11 @@ export interface HandOffArgs {
   failures?: Pick<Fingerprint, "job" | "hash" | "raw">[];
   paths?: string[];
   hunks?: { path: string; line: number; ours: string; theirs: string }[];
+  /** Branch names for the hunk labels, the CI run that started this, and the base commit being merged (full sha). */
+  baseRef?: string;
+  headRef?: string;
+  run?: string;
+  baseCommit?: string;
 }
 
 /**
@@ -168,11 +173,11 @@ export async function handOff(c: ShepherdCtx, pull: number, a: HandOffArgs): Pro
   const runOf = (sha: string) => prev?.entries.find((e) => e.commit && sha.startsWith(e.commit.slice(0, 7)) )?.run;
   const body = renderHandoff({
     rule: a.rule, reason: a.reason, question: a.question ?? RULE_QUESTION[a.rule], repoUrl: repoUrl(c),
-    failures: a.failures, paths: a.paths, hunks: a.hunks,
+    failures: a.failures, paths: a.paths, hunks: a.hunks, baseRef: a.baseRef, headRef: a.headRef, run: a.run, baseCommit: a.baseCommit,
     attempts: hist.records.map((r) => ({ ...r, run: runOf(r.sha) })),
   });
   await c.ok.rest.issues.createComment({ ...c.repo, issue_number: pull, body });
-  await note(c, pull, hist, { kind: "info", what: RULE_TITLE[a.rule], changed: "nothing pushed", result: `Stopped: ${a.reason}` }, { on: false, status: RULE_STATUS[a.rule] });
+  await note(c, pull, hist, { kind: "info", what: RULE_TITLE[a.rule], changed: "nothing pushed", result: `Stopped: ${a.reason}`, run: a.run, commit: a.baseCommit }, { on: false, status: RULE_STATUS[a.rule] });
   c.log.info(`Shepherd hand-off #${pull}: ${RULE_TITLE[a.rule]} (${a.reason}).`);
 }
 
@@ -366,6 +371,7 @@ async function onSweep(c: ShepherdCtx, ev: string, p: ShepherdPayload): Promise<
 
 async function turnOff(c: ShepherdCtx, pr: PullLite, actor: string): Promise<void> {
   if (hasLabel(pr, SHEPHERD_LABEL)) await removeLabel(c, pr.number, SHEPHERD_LABEL);
+  if ((await readState(c, pr.number))?.status === "off") { c.log.info(`Shepherd is already off for #${pr.number}; nothing to log.`); return; }
   const hist = await history(c, pr.number);
   await note(c, pr.number, hist, { kind: "info", what: "Shepherd turned off", changed: "nothing", result: `Off, by ${actor}` }, { on: false, status: "off" });
   c.log.info(`Shepherd off for #${pr.number}.`);
@@ -373,10 +379,15 @@ async function turnOff(c: ShepherdCtx, pr: PullLite, actor: string): Promise<voi
 
 /** Turn Shepherd on (or resume it). `retry` also grants exactly one more fix attempt (`/mergejudge shepherd retry`). */
 async function turnOn(c: ShepherdCtx, pr: PullLite, actor: string, how: "on" | "resumed" | "retry" = "on", commentId?: number): Promise<void> {
+  // Already on (label, state on, nothing waiting for a human): a plain `/mergejudge shepherd` logs no second "turned on" row.
+  const wasOn = how === "on" && hasLabel(pr, SHEPHERD_LABEL) && !hasLabel(pr, NEEDS_HUMAN_LABEL);
+  const prev = wasOn ? await readState(c, pr.number) : null;
   if (!hasLabel(pr, SHEPHERD_LABEL)) await addLabel(c, pr.number, SHEPHERD_LABEL);
   if (hasLabel(pr, NEEDS_HUMAN_LABEL)) await removeLabel(c, pr.number, NEEDS_HUMAN_LABEL);
   const hist = await history(c, pr.number);
-  const state = how === "retry"
+  const state = prev?.on
+    ? prev
+    : how === "retry"
     ? await setState(c, pr.number, hist, (s) => addEntry(addGrant({ ...s, on: true, status: "watching" }, { who: actor, at: nowIso(c), comment: commentId }), { at: nowIso(c), kind: "info", what: "Retry granted", changed: "nothing", result: `+1 fix attempt, by ${actor}` }))
     : await note(c, pr.number, hist, { kind: "info", what: how === "on" ? "Shepherd turned on" : "Shepherd resumed", changed: "nothing", result: `Watching, by ${actor}` }, { on: true, status: "watching" });
   c.log.info(`Shepherd ${how} for #${pr.number}.`);
@@ -602,7 +613,7 @@ async function act(c: ShepherdCtx, pr: PullLite, d: Decision, f: FailCtx): Promi
       await note(c, n, f.hist, { kind: "ci", what, changed: "nothing pushed", result: "Re-running failed jobs to rule out a flaky test (no attempt counted)", run: f.runUrl });
       return;
     case "handoff":
-      return handOff(c, n, { rule: d.rule, reason: d.reason, question: d.question, failures: f.fps });
+      return handOff(c, n, { rule: d.rule, reason: d.reason, question: d.question, failures: f.fps, run: f.runUrl });
     case "fix":
       return fixCi(c, pr, d.attempt, f);
   }
@@ -706,15 +717,15 @@ async function fixCi(c: ShepherdCtx, pr: PullLite, attempt: number, f: FailCtx):
     if (!fix.ok) {
       await resetClean(c.cwd);
       if ("skip" in fix) { c.log.info(fix.skip); return; }
-      return handOff(c, n, { ...fix.hand, failures: f.fps });
+      return handOff(c, n, { ...fix.hand, failures: f.fps, run: f.runUrl });
     }
     const staged = await stageAll(c.cwd);
-    if (!staged.files.length) { await resetClean(c.cwd); return handOff(c, n, { rule: RULE.H4, reason: "the fix changed nothing", failures: f.fps }); }
+    if (!staged.files.length) { await resetClean(c.cwd); return handOff(c, n, { rule: RULE.H4, reason: "the fix changed nothing", failures: f.fps, run: f.runUrl }); }
     const hits = protectedHits(staged.files, { shepherd: sc });
-    if (hits.length) { await resetClean(c.cwd); return handOff(c, n, { rule: RULE.H1, reason: "the fix needs a protected path; nothing was pushed", paths: hits, failures: f.fps }); }
+    if (hits.length) { await resetClean(c.cwd); return handOff(c, n, { rule: RULE.H1, reason: "the fix needs a protected path; nothing was pushed", paths: hits, failures: f.fps, run: f.runUrl }); }
     if (staged.lines > sc.max_fix_lines || staged.files.length > sc.max_fix_files) {
       await resetClean(c.cwd);
-      return handOff(c, n, { rule: RULE.H2, reason: `the fix changes ${staged.lines} lines in ${staged.files.length} files (limits: ${sc.max_fix_lines} lines, ${sc.max_fix_files} files); nothing was pushed`, paths: staged.files, failures: f.fps });
+      return handOff(c, n, { rule: RULE.H2, reason: `the fix changes ${staged.lines} lines in ${staged.files.length} files (limits: ${sc.max_fix_lines} lines, ${sc.max_fix_files} files); nothing was pushed`, paths: staged.files, failures: f.fps, run: f.runUrl });
     }
     const job = f.fps[0]?.job ?? "CI";
     const message = buildCommitMessage({
@@ -749,6 +760,9 @@ export async function conflictCheck(c: ShepherdCtx, prIn: PullLite): Promise<voi
   if (hist.attempts >= cap) return handOff(c, n, { rule: RULE.L1, reason: `all ${cap} fix attempts are used (${hist.attempts}/${cap}), so the merge conflict is left to a human` });
   if (!(await checkoutHead(c.cwd, pr.head.ref, pr.head.sha))) { c.log.info(`Branch ${pr.head.ref} moved; skipping conflict work.`); return; }
   const attempt = hist.attempts + 1;
+  /** Hand-off with the branch names and, once the merge has started, the base commit being merged. */
+  let baseCommit: string | undefined;
+  const hand = (a: HandOffArgs) => handOff(c, n, { baseRef: pr.base.ref, headRef: pr.head.ref, baseCommit, ...a });
   /**
    * H1 over the whole merge (not just the conflicted files): whatever the base brings in must be free of protected paths.
    * Runs first, right after the merge starts and before any conflict classification, size check or resolution, for clean and
@@ -759,7 +773,7 @@ export async function conflictCheck(c: ShepherdCtx, prIn: PullLite): Promise<voi
     if (!incoming.length) return false;
     await resetClean(c.cwd);
     const inConflict = incoming.some((p) => conflicted.includes(p));
-    await handOff(c, n, { rule: RULE.H1, reason: inConflict ? "the merge conflict is in a protected path; the merge was aborted and nothing was pushed" : `merging ${pr.base.ref} would bring changes to protected files into this PR; the merge was aborted and nothing was pushed`, paths: incoming });
+    await hand({ rule: RULE.H1, reason: inConflict ? "the merge conflict is in a protected path; the merge was aborted and nothing was pushed" : `merging ${pr.base.ref} would bring changes to protected files into this PR; the merge was aborted and nothing was pushed`, paths: incoming });
     return true;
   };
   const finish = async (touched: string[], lines: number) => {
@@ -773,6 +787,7 @@ export async function conflictCheck(c: ShepherdCtx, prIn: PullLite): Promise<voi
   try {
     const start = await startMerge(c.cwd, pr.base.ref, c.identity ?? DEFAULT_IDENTITY);
     if (start.state === "uptodate") { c.log.info("Base is already merged; nothing to resolve."); return; }
+    baseCommit = await refSha(c.cwd, `refs/remotes/origin/${pr.base.ref}`);
     if (await incomingGuard(start.state === "conflict" ? start.conflicted : [])) return;
     if (start.state === "clean") return await finish([], 0);
 
@@ -785,7 +800,7 @@ export async function conflictCheck(c: ShepherdCtx, prIn: PullLite): Promise<voi
       if (v.kind === "resolved") writeFileSync(join(c.cwd, path), v.text);
       else if (v.kind === "logic") hunks.push(...v.hunks.map((h) => ({ path, line: h.line, ours: h.ours, theirs: h.theirs })));
     }
-    if (hunks.length) { await resetClean(c.cwd); return handOff(c, n, { rule: RULE.H4, reason: "both sides changed the same logic; `git merge --abort` was run and nothing was pushed", hunks, paths: [...new Set(hunks.map((h) => h.path))] }); }
+    if (hunks.length) { await resetClean(c.cwd); return hand({ rule: RULE.H4, reason: "both sides changed the same logic; `git merge --abort` was run and nothing was pushed", hunks, paths: [...new Set(hunks.map((h) => h.path))] }); }
 
     const mine = locks.length ? await changedByPr(c.cwd, await mergeBase(c.cwd, pr.base.ref)) : new Set<string>();
     for (const lock of locks) {
@@ -794,22 +809,22 @@ export async function conflictCheck(c: ShepherdCtx, prIn: PullLite): Promise<voi
       else if (lock.endsWith("package-lock.json")) {
         await takeTheirs(c.cwd, lock);
         if (manifestChanged) {
-          if (!(await (c.npmAvailable ?? npmAvailable)(c.cwd))) { await resetClean(c.cwd); return handOff(c, n, { rule: RULE.H4, reason: "package-lock.json conflicts and npm is not available to regenerate it", paths: [lock] }); }
+          if (!(await (c.npmAvailable ?? npmAvailable)(c.cwd))) { await resetClean(c.cwd); return hand({ rule: RULE.H4, reason: "package-lock.json conflicts and npm is not available to regenerate it", paths: [lock] }); }
           const r = await (c.runCommand ?? sh)("npm install --package-lock-only --ignore-scripts", join(c.cwd, dirname(lock)));
-          if (r.code !== 0) { await resetClean(c.cwd); return handOff(c, n, { rule: RULE.H4, reason: "regenerating package-lock.json failed", paths: [lock] }); }
+          if (r.code !== 0) { await resetClean(c.cwd); return hand({ rule: RULE.H4, reason: "regenerating package-lock.json failed", paths: [lock] }); }
         }
       } else if (manifestChanged) {
         await resetClean(c.cwd);
-        return handOff(c, n, { rule: RULE.H4, reason: `${lock} conflicts and this PR also changed its manifest, which Shepherd cannot regenerate`, paths: [lock] });
+        return hand({ rule: RULE.H4, reason: `${lock} conflicts and this PR also changed its manifest, which Shepherd cannot regenerate`, paths: [lock] });
       } else await takeTheirs(c.cwd, lock);
     }
-    for (const path of conflicted) if (/^(<{7}|>{7}) /m.test(readFileSync(join(c.cwd, path), "utf8"))) { await resetClean(c.cwd); return handOff(c, n, { rule: RULE.H4, reason: "conflict markers remained after the mechanical resolution", paths: [path] }); }
+    for (const path of conflicted) if (/^(<{7}|>{7}) /m.test(readFileSync(join(c.cwd, path), "utf8"))) { await resetClean(c.cwd); return hand({ rule: RULE.H4, reason: "conflict markers remained after the mechanical resolution", paths: [path] }); }
 
     const staged = await stageAll(c.cwd, conflicted);
     // Size: lines changed in the conflicted files relative to the PR's own ("ours") version.
     if (staged.lines > sc.max_fix_lines || staged.files.length > sc.max_fix_files) {
       await resetClean(c.cwd);
-      return handOff(c, n, { rule: RULE.H2, reason: `the resolution changes ${staged.lines} lines in ${staged.files.length} files (limits: ${sc.max_fix_lines} lines, ${sc.max_fix_files} files); nothing was pushed`, paths: conflicted });
+      return hand({ rule: RULE.H2, reason: `the resolution changes ${staged.lines} lines in ${staged.files.length} files (limits: ${sc.max_fix_lines} lines, ${sc.max_fix_files} files); nothing was pushed`, paths: conflicted });
     }
     await stageAll(c.cwd);
     return await finish(conflicted, staged.lines);

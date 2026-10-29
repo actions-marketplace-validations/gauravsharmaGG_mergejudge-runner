@@ -322,6 +322,78 @@ describe("retry re-checks the outstanding CI failure", () => {
   });
 });
 
+// ---------------- cosmetics ----------------
+
+describe("cosmetics", () => {
+  const plainText = (s: string) => s.replace(/\\/g, "");
+
+  it("/mergejudge shepherd on a PR that is already on logs no second 'turned on' row", async () => {
+    const repo = makeRepo();
+    const gh = fakeGh(repo, { labels: new Set() });
+    const ctx = makeCtx(repo, gh);
+    await runShepherd(ctx, "issue_comment", cmd("/mergejudge shepherd", 1));
+    const rows = () => parseShepherdState(stateComment(gh.st)!.body)!.entries.filter((e) => e.what === "Shepherd turned on").length;
+    expect(rows()).toBe(1);
+    const writes = gh.st.calls.filter((x) => x === "updateComment" || x === "createComment").length;
+    await runShepherd(ctx, "issue_comment", cmd("/mergejudge shepherd", 2));
+    expect(rows()).toBe(1);
+    expect(gh.st.calls.filter((x) => x === "updateComment" || x === "createComment").length).toBe(writes);
+    // After a hand-off (needs-human) the same command does resume and logs.
+    gh.st.labels.add("needs-human");
+    await runShepherd(ctx, "issue_comment", cmd("/mergejudge shepherd", 3));
+    expect(gh.st.labels.has("needs-human")).toBe(false);
+    expect(rows()).toBe(2);
+  });
+
+  it("turning off a PR that is already off logs no second 'turned off' row", async () => {
+    const repo = makeRepo();
+    const gh = fakeGh(repo);
+    const ctx = makeCtx(repo, gh);
+    await runShepherd(ctx, "issue_comment", cmd("/mergejudge shepherd off", 1));
+    await runShepherd(ctx, "issue_comment", cmd("/mergejudge shepherd off", 2));
+    expect(parseShepherdState(stateComment(gh.st)!.body)!.entries.filter((e) => e.what === "Shepherd turned off")).toHaveLength(1);
+  });
+
+  const readme = "# Title\n\nIntro.\n";
+  it("the H4 hunk preview names the branches, and the H4 row and hand-off link the base commit", async () => {
+    const { repo, gh, run } = conflictRepo({ "src/m.ts": "export const f = () => 1;\n" }, { "src/m.ts": "export const f = () => 2;\n" }, { "src/m.ts": "export const f = () => 3;\n" });
+    await run(sync);
+    const b = plainText(handoffs(gh.st)[0]!.body);
+    expect(b).toContain("Hand-off H4");
+    expect(b).toContain("main (base):");
+    expect(b).toContain("feature (this PR):");
+    expect(b).not.toMatch(/ ours: | base: /);
+    const baseSha = repo.tip("main");
+    expect(b).toContain(`https://github.com/o/r/commit/${baseSha}`);
+    expect(parseShepherdState(stateComment(gh.st)!.body)!.entries.at(-1)).toMatchObject({ commit: baseSha });
+  });
+
+  it("the H1 row and hand-off link the base commit being merged", async () => {
+    const { repo, gh, run } = conflictRepo(
+      { "README.md": readme, ".github/workflows/ci.yml": "name: ci\n" },
+      { "README.md": readme + "\nfunction a() {}\n" },
+      { "README.md": readme + "\nfunction b() {}\n", ".github/workflows/ci.yml": "name: ci2\n" },
+    );
+    await run(sync);
+    const baseSha = repo.tip("main");
+    expect(handoffs(gh.st)[0]!.body).toContain(`[${baseSha.slice(0, 7)}](https://github.com/o/r/commit/${baseSha})`);
+    expect(parseShepherdState(stateComment(gh.st)!.body)!.entries.at(-1)).toMatchObject({ commit: baseSha });
+  });
+
+  it("the L1 'all fix attempts are used' row and hand-off link the CI run that triggered them", async () => {
+    const repo = makeRepo({ "src/a.ts": "export const a = 1;\n" });
+    repo.commit("feature", { "src/a.ts": "export const a = 2;\n" }, buildCommitMessage({ subject: "s", attempt: 1, kind: "ci", fingerprints: ["abcdef0123"], failures: 1 }));
+    repo.commit("feature", { "src/a.ts": "export const a = 3;\n" }, "human: change a");
+    const gh = fakeGh(repo, { jobs: [{ id: 1, name: "test", conclusion: "failure", log: failLog("TypeError: boom") }] });
+    const ctx = makeCtx(repo, gh, {}, "shepherd:\n  max_attempts: 1\n");
+    await runShepherd(ctx, "workflow_run", wr(gh, { id: 4242, run_attempt: 2 }));
+    const h = handoffs(gh.st)[0]!.body;
+    expect(h).toContain("Loop breaker L1");
+    expect(h).toContain("https://github.com/o/r/actions/runs/4242");
+    expect(parseShepherdState(stateComment(gh.st)!.body)!.entries.at(-1)).toMatchObject({ run: "https://github.com/o/r/actions/runs/4242" });
+  });
+});
+
 describe("H1 comes first (live PR 11)", () => {
   const readme = "# Title\n\nIntro.\n";
   it("a logic conflict plus an incoming .github change reports H1, not H4", async () => {

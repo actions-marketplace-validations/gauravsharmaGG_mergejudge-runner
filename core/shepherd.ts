@@ -9,6 +9,8 @@ import { redact } from "../src/redact.js";
 /** Label that turns Shepherd on for a PR (adding) or off (removing). */
 export const SHEPHERD_LABEL = "shepherd";
 export const SHEPHERD_MARKER = "<!-- mergejudge:shepherd";
+/** The state comment only: the hand-off comment's marker (`<!-- mergejudge:shepherd-handoff -->`) starts with SHEPHERD_MARKER too. */
+export const isStateComment = (body: string | null | undefined): boolean => /<!-- mergejudge:shepherd [^\s>-]/.test(body ?? "");
 export const MAX_ENTRIES = 20;
 const FIELD_MAX = 300;
 
@@ -82,6 +84,8 @@ export interface ShepherdEntry {
   commit?: string;
   /** https URL of the CI run. */
   run?: string;
+  /** Failure fingerprints this step set out to fix (mirror of the commit trailers; the commits are authoritative). */
+  fingerprints?: string[];
 }
 export interface ShepherdState {
   v: 1;
@@ -100,6 +104,7 @@ const entrySchema = z.object({
   result: z.string(),
   commit: z.string().regex(/^[0-9a-f]{7,40}$/i).optional(),
   run: z.string().regex(/^https:\/\/[^\s<>()]+$/).max(300).optional(),
+  fingerprints: z.array(z.string().regex(/^[0-9a-f]{6,16}$/)).max(10).optional(),
 });
 const stateSchema = z.object({
   v: z.literal(1),
@@ -121,6 +126,7 @@ export function addEntry(state: ShepherdState, e: ShepherdEntry, sanitize: (t: s
     at: e.at, kind: e.kind, what: clean(e.what, sanitize), changed: clean(e.changed, sanitize), result: clean(e.result, sanitize),
     ...(e.commit && /^[0-9a-f]{7,40}$/i.test(e.commit) ? { commit: e.commit } : {}),
     ...(e.run && /^https:\/\/[^\s<>()]+$/.test(e.run) ? { run: e.run.slice(0, 300) } : {}),
+    ...(e.fingerprints?.length ? { fingerprints: e.fingerprints.filter((f) => /^[0-9a-f]{6,16}$/.test(f)).slice(0, 10) } : {}),
   };
   return { ...state, entries: [...state.entries, entry].slice(-MAX_ENTRIES) };
 }
@@ -205,7 +211,7 @@ export async function upsertShepherdComment(
   ok: Octokit, r: Repo, pull: number, next: ShepherdState | ((prev: ShepherdState | null) => ShepherdState),
 ): Promise<ShepherdState> {
   const comments = await ok.paginate(ok.rest.issues.listComments, { ...r, issue_number: pull, per_page: 100 });
-  const existing = comments.find((c) => c.body?.includes(SHEPHERD_MARKER) && c.user?.type === "Bot");
+  const existing = comments.find((c) => isStateComment(c.body) && c.user?.type === "Bot");
   const state = typeof next === "function" ? next(parseShepherdState(existing?.body)) : next;
   const body = renderShepherdComment(state, `https://github.com/${r.owner}/${r.repo}`);
   if (existing) await ok.rest.issues.updateComment({ ...r, comment_id: existing.id, body });

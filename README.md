@@ -390,15 +390,38 @@ Turn it on for one PR with the comment `/mergejudge shepherd` or the `shepherd` 
 
 **Tier 1 (free, no runner).** While Shepherd is on, MergeJudge's inline review comments can include GitHub "suggested changes" for simple one-line fixes. Click "Commit suggestion" to apply one as its own small commit. Each batch is logged in a single Shepherd comment on the PR. Findings without a verified line, and anything in a protected path, get no suggestion. With Shepherd off, reviews are unchanged.
 
-**Tier 2 (Action mode)** fixes failing CI and merge conflicts. It is coming in the next release.
+**Tier 2 (Action `mode: shepherd`)** watches a PR in your own Actions, with your own model key, and pushes small fixes for two things: failed CI (GitHub Actions workflow runs) and real merge conflicts with the base branch. It never merges, never deploys and never force-pushes. It fixes only actual conflicts: it never rebases and never merges the base branch just because the base moved. Fixing review findings is not part of this release.
 
-Guardrails: `.github/`, deploy and rollback scripts, auth and secrets files, and `.mergejudge.yml` are never edited automatically. Fix attempts are capped per PR (default 3), then Shepherd posts a summary and stops. No force-pushes.
+Setup: copy [`examples/shepherd-workflow.yml`](./examples/shepherd-workflow.yml) to `.github/workflows/shepherd.yml`, set the workflow name in `workflow_run.workflows` to your CI workflow, and keep the `actions/checkout` step with `fetch-depth: 0`. Then comment `/mergejudge shepherd` on a PR (or add the `shepherd` label). Only people with write, maintain or admin access can use the comment; the label is the on/off switch. `/mergejudge shepherd off` or removing the label turns it off. Fork PRs are refused (Shepherd only works for same-repo branches), so no fork code is checked out next to your secrets. `mode: auto` routes these events to Shepherd and keeps every other event where it was.
+
+- CI fixes: Shepherd reads the end of each failed job's log (redacted, about 200 lines), then asks your model for the smallest fix, as full new contents of at most `max_fix_files` files taken from the PR's files and the files the log names. If you set the Action input `shepherd_fix_command` (for example `npm run lint -- --fix`), it runs first; if it changes files, that diff is the fix and no model is called.
+- Conflicts: only mechanical ones. Git merges non-overlapping hunks itself; import blocks where both sides add or remove distinct imports are merged; lockfiles take the base version (`package-lock.json` is regenerated with `npm install --package-lock-only --ignore-scripts` when the PR changed `package.json`; `go.sum` is a union of both sides). If both sides changed the same logic, Shepherd runs `git merge --abort` and hands off with the files and hunks. It never asks the model to resolve a logic conflict.
+
+**Stop rules.** Each is enforced in code, not by model judgment, and the hand-off comment names the rule that fired.
+
+- L1, retry budget: at most `shepherd.max_attempts` (default 3) fix attempts per PR. They are counted from Shepherd's own commits (trailer `MergeJudge-Shepherd: attempt N`), so deleting the Shepherd comment, toggling it off and on, or restarting a job never resets the count.
+- L2, same failure twice: if a fix leaves the same failing job fingerprint in place, it stops at once.
+- L3, ping-pong: if a fix brings back any failure seen in an earlier attempt, it stops. It also stops when the review flags lines in files Shepherd's own latest commit touched.
+- L4, fixes must shrink: each attempt must strictly reduce the failures (failing jobs plus failing tests when the log reports them). Equal or more stops it.
+- L5, one review pass: Shepherd's own commits get no suggested changes and no new inline findings.
+- H1, protected paths: a fix that needs `.github/`, deploy or rollback scripts, auth files, secrets or `.mergejudge.yml` is not pushed; local changes are reverted.
+- H2, size: more than `shepherd.max_fix_lines` (default 50 changed lines, added plus removed) or `shepherd.max_fix_files` (default 3) in one fix is not pushed. For conflicts, lines are counted in the conflicted files against the PR's own version.
+- H3, not a code problem: flaky tests, missing secrets or permissions, runner or infrastructure errors, timeouts, registry outages and invalid workflow files. On the first failure of a job, Shepherd re-runs the failed jobs once. If the re-run passes, it hands off as a flaky test with no fix commit. These cost no attempt.
+- H4, judgment calls: a conflict where both sides changed the same logic, or the model replies `CANNOT_FIX` (or says it is a design or product question).
+
+**Hand-off.** When any rule stops Shepherd it adds the `needs-human` label, keeps the `shepherd` label, and posts one separate comment: what failed (job and first error line, redacted), what it tried (each fix commit and CI run link), which rule stopped it, and "The one decision needed from you". It pushes nothing more until a human removes `needs-human` or comments `/mergejudge shepherd`. Every entry point checks `needs-human` first. The cap in L1 still applies after a re-enable, so a spent budget hands off again with a clear message.
+
+**Token note.** Pushes made with the default `GITHUB_TOKEN` do not start new workflow runs (a GitHub rule), so CI will not re-run after a fix. Pass a GitHub App token (`app_id` and `app_private_key`) or a token secret as `github_token` so CI re-runs. Shepherd caps its attempts either way. Shepherd also ignores its own bot comments, labels and workflow runs, so a push by Shepherd never turns it on again.
+
+Guardrails: `.github/`, deploy and rollback scripts, auth and secrets files, and `.mergejudge.yml` are never edited automatically. No force-pushes.
 
 ```yaml
 # .mergejudge.yml (read from the base branch)
 shepherd:
   enabled: true         # the repo allows Shepherd to be turned on per PR
   max_attempts: 3       # fix attempts per PR, 1-10
+  max_fix_lines: 50     # changed lines (added plus removed) per fix
+  max_fix_files: 3      # files per fix
   suggestions: true     # tier 1: suggested changes on review comments
   protected_paths: []   # extra globs Shepherd never edits, added to the built-in list
 ```

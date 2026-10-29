@@ -42,12 +42,12 @@ describe("shepherd command and label", () => {
 
 describe("shepherd config", () => {
   it("old configs get defaults", () => {
-    expect(cfg.shepherd).toEqual({ enabled: true, max_attempts: 3, protected_paths: [], suggestions: true });
+    expect(cfg.shepherd).toEqual({ enabled: true, max_attempts: 3, max_fix_lines: 50, max_fix_files: 3, protected_paths: [], suggestions: true });
     expect(parseConfig("lanes:\n  auto: [docs/**]\n").shepherd.max_attempts).toBe(3);
   });
   it("reads and validates the block", () => {
     const c = parseConfig("shepherd:\n  max_attempts: 5\n  suggestions: false\n  protected_paths: [infra/**]\n");
-    expect(c.shepherd).toEqual({ enabled: true, max_attempts: 5, protected_paths: ["infra/**"], suggestions: false });
+    expect(c.shepherd).toEqual({ enabled: true, max_attempts: 5, max_fix_lines: 50, max_fix_files: 3, protected_paths: ["infra/**"], suggestions: false });
     expect(() => parseConfig("shepherd:\n  max_attempts: 11\n")).toThrow();
     expect(() => parseConfig("shepherd:\n  max_attempts: 0\n")).toThrow();
   });

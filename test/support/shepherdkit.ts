@@ -67,7 +67,17 @@ export interface GhState {
   /** Commit list for pulls.listCommits; default: git log of the bare repo's branch (oldest first). */
   commits?: () => { sha: string; commit: { message: string } }[];
   jobs: FakeJob[];
-  checkRuns: { name: string; status: string; conclusion: string | null }[];
+  /** Check runs on the head. Unset: one completed check run per entry of `jobs`. */
+  checkRuns?: { id?: number; name: string; status: string; conclusion: string | null }[];
+  /** Commit statuses on the head (listCommitStatusesForRef order does not matter; the newest id wins). */
+  statuses: { id?: number; context: string; state: string }[];
+  /** Branch protection of the base: required check names, or "forbidden" for a 403. Unset: unprotected. */
+  protection?: { contexts?: string[]; checks?: { context: string }[] } | "forbidden";
+  /** Ruleset required checks on the base, or "forbidden" for a 403. */
+  rules?: string[] | "forbidden";
+  /** The running Shepherd workflow run and its jobs (what listJobsForWorkflowRun returns for that run id). */
+  selfRunId?: number;
+  selfJobs: { id: number; name: string; conclusion: string | null }[];
   permissions: Record<string, string>;
   mergeable: boolean | null;
   prFiles: string[];
@@ -81,7 +91,7 @@ export interface GhState {
 
 export function fakeGh(repo: Repo3, over: Partial<GhState> = {}) {
   const st: GhState = {
-    labels: new Set(["shepherd"]), comments: [], jobs: [], checkRuns: [], permissions: { maintainer: "admin", rando: "read" },
+    labels: new Set(["shepherd"]), comments: [], jobs: [], statuses: [], selfJobs: [], permissions: { maintainer: "admin", rando: "read" },
     mergeable: true, prFiles: ["src/a.ts"], state: "open", fork: false, calls: [], reruns: [], ...over,
   };
   let nextId = 1;
@@ -112,11 +122,24 @@ export function fakeGh(repo: Repo3, over: Partial<GhState> = {}) {
     },
     repos: {
       getCollaboratorPermissionLevel: async (p: { username: string }) => ({ data: { permission: st.permissions[p.username] ?? "none" } }),
+      getBranch: async () => {
+        if (st.protection === "forbidden") throw Object.assign(new Error("Forbidden"), { status: 403 });
+        return { data: { protected: !!st.protection, protection: st.protection ? { required_status_checks: st.protection } : undefined } };
+      },
+      getBranchRules: async () => {
+        if (st.rules === "forbidden") throw Object.assign(new Error("Forbidden"), { status: 403 });
+        return { data: (st.rules ?? []).length ? [{ type: "required_status_checks", parameters: { required_status_checks: (st.rules as string[]).map((context) => ({ context })) } }] : [] };
+      },
+      listCommitStatusesForRef: async () => ({ data: st.statuses }),
       getCommit: async () => ({ data: { commit: { message: st.headCommit?.message ?? "x" }, files: (st.headCommit?.files ?? []).map((filename) => ({ filename })) } }),
     },
-    checks: { listForRef: async () => ({ data: { check_runs: st.checkRuns } }) },
+    checks: { listForRef: async () => ({ data: { check_runs: st.checkRuns ?? st.jobs.map((j) => ({ id: j.id, name: j.name, status: j.conclusion ? "completed" : "in_progress", conclusion: j.conclusion })) } }) },
     actions: {
-      listJobsForWorkflowRun: async () => { log("listJobs"); return { data: { jobs: st.jobs.map(({ log: _l, ...j }) => j) } }; },
+      listJobsForWorkflowRun: async (p: { run_id: number }) => {
+        if (st.selfRunId != null && p.run_id === st.selfRunId) return { data: { jobs: st.selfJobs } };
+        log("listJobs");
+        return { data: { jobs: st.jobs.map(({ log: _l, ...j }) => j) } };
+      },
       downloadJobLogsForWorkflowRun: async (p: { job_id: number }) => ({ data: st.jobs.find((j) => j.id === p.job_id)?.log ?? "" }),
       reRunWorkflowFailedJobs: async (p: { run_id: number }) => { log("rerun"); st.reruns.push(p.run_id); return { data: {} }; },
     },

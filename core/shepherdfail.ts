@@ -93,6 +93,52 @@ export function failureCount(fps: Pick<Fingerprint, "tests">[]): number {
   return fps.reduce((n, f) => n + 1 + (f.tests && f.tests > 0 ? f.tests : 0), 0);
 }
 
+// ---------------- failing checks on the head (L4 baseline) ----------------
+
+export interface CheckRunLite { id?: number; name: string; status: string; conclusion: string | null }
+export interface StatusLite { id?: number; context: string; state: string }
+export interface CheckTally {
+  /** Failing checks (required ones when the base branch names required checks). */
+  failing: number;
+  /** Counted checks that have not finished yet. */
+  pending: number;
+}
+
+const FAILING_RUN = new Set(["failure", "timed_out", "cancelled", "action_required", "startup_failure"]);
+const FAILING_STATUS = new Set(["failure", "error"]);
+
+/** The newest item per key: the highest id wins; without ids the later one in the list does. */
+function latestPer<T extends { id?: number }>(items: T[], key: (t: T) => string): T[] {
+  const m = new Map<string, T>();
+  for (const t of items) {
+    const old = m.get(key(t));
+    if (!old || (t.id ?? 0) >= (old.id ?? 0)) m.set(key(t), t);
+  }
+  return [...m.values()];
+}
+
+/**
+ * Failing and pending checks across every check run and commit status on one commit (L4 compares this before and after a fix).
+ * `required` limits the count to those check names / status contexts; null counts every check. `excludeNames` are never
+ * counted (Shepherd's own workflow jobs). The latest check run per name and the latest status per context win.
+ * A required check that has not reported at all is not counted: it cannot be told apart from one that will never run.
+ */
+export function countFailingChecks(checkRuns: CheckRunLite[], statuses: StatusLite[], required: string[] | null, excludeNames: string[] = []): CheckTally {
+  const want = (name: string) => !excludeNames.includes(name) && (!required || required.includes(name));
+  let failing = 0, pending = 0;
+  for (const r of latestPer(checkRuns, (x) => x.name)) {
+    if (!want(r.name)) continue;
+    if (r.status !== "completed") pending++;
+    else if (FAILING_RUN.has(r.conclusion ?? "")) failing++;
+  }
+  for (const s of latestPer(statuses, (x) => x.context)) {
+    if (!want(s.context)) continue;
+    if (s.state === "pending") pending++;
+    else if (FAILING_STATUS.has(s.state)) failing++;
+  }
+  return { failing, pending };
+}
+
 /** Last `lines` lines, at most `maxChars` characters (the end of the log is what failed). */
 export function tailLog(log: string, lines = 200, maxChars = 20_000): string {
   const t = stripAnsi(log).split(/\r?\n/).slice(-lines).join("\n");
@@ -253,6 +299,12 @@ export interface DecideInput {
   cantFix: FailureClass;
   /** Shepherd's own log shows it re-ran this run's failed jobs to rule out a flaky test. */
   rerunRequested: boolean;
+  /**
+   * Failing and pending checks on the head sha (all workflows and statuses, see countFailingChecks). L4 compares `failing`
+   * with the count recorded before the last fix, and nothing is decided while checks are pending. Unset: count the
+   * failing jobs of this one run instead.
+   */
+  checks?: CheckTally;
   /** Fingerprints the Shepherd comment recorded (mirror of the trailers); only widens the L3 set, commits stay authoritative. */
   stateFingerprints?: string[];
 }
@@ -288,10 +340,12 @@ export function decide(i: DecideInput): Decision {
   if (i.runAttempt === 1 && !i.rerunRequested && current.some((h) => !known.has(h)) && i.history.attempts < cap)
     return { action: "rerun", reason: "re-running failed jobs to rule out a flaky test" };
   if (postFix && latest?.failures != null) {
-    const now = failureCount(i.failures);
-    if (now >= latest.failures) return hand(RULE.L4, `the fix did not reduce the failures (${latest.failures} before, ${now} now)`);
+    if (i.checks && i.checks.pending > 0) return { action: "skip", reason: `${i.checks.pending} check(s) on the head are still running; L4 waits for the full picture and a later run or check suite will re-evaluate` };
+    const now = i.checks ? i.checks.failing : failureCount(i.failures);
+    if (now >= latest.failures) return hand(RULE.L4, `the fix did not reduce the failures across all checks (${latest.failures} before, ${now} now)`);
   }
   if (i.history.attempts >= cap) return hand(RULE.L1, `all ${cap} fix attempts are used (${i.history.attempts}/${cap})`);
+  if (i.checks && i.checks.pending > 0) return { action: "skip", reason: `${i.checks.pending} check(s) on the head are still running; no fix on a partial picture, a later run or check suite will re-evaluate` };
   return { action: "fix", attempt: i.history.attempts + 1 };
 }
 

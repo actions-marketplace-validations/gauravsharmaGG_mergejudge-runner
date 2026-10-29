@@ -19,8 +19,8 @@ import {
 } from "../core/shepherd.js";
 import { classifyConflictFile, isLockfile, manifestOf, unionLines } from "../core/shepherdconflict.js";
 import {
-  buildCommitMessage, classifyFailure, decide, failureCount, fingerprintFailure, isGreen, referencedFiles, shepherdHistory, tailLog,
-  type Decision, type Fingerprint, type ShepherdHistory,
+  buildCommitMessage, classifyFailure, countFailingChecks, decide, fingerprintFailure, isGreen, referencedFiles, shepherdHistory, tailLog,
+  type CheckTally, type Decision, type Fingerprint, type ShepherdHistory,
 } from "../core/shepherdfail.js";
 import { HANDOFF_MARKER, NEEDS_HUMAN_LABEL, renderHandoff } from "../core/shepherdhandoff.js";
 import { RULE, RULE_QUESTION, RULE_STATUS, RULE_TITLE, effectiveCap, type RuleId } from "../core/shepherdrules.js";
@@ -48,8 +48,8 @@ export interface ShepherdCtx {
   botLogin: string | null;
   /** Provider built like the review path's; null when none is configured. */
   provider: LlmProvider | null;
-  /** The running workflow (GITHUB_WORKFLOW and GITHUB_WORKFLOW_REF): its own runs are never acted on. */
-  self?: { name?: string; ref?: string };
+  /** The running workflow (GITHUB_WORKFLOW, GITHUB_WORKFLOW_REF, GITHUB_RUN_ID): its own runs are never acted on and its own jobs never count as failing checks. */
+  self?: { name?: string; ref?: string; runId?: string | number };
   /** Register a derived secret (e.g. the base64 auth header) with the log redaction and core.setSecret. */
   onSecret?: (s: string) => void;
   runCommand?: (cmd: string, cwd: string) => Promise<RunResult>;
@@ -296,6 +296,50 @@ async function turnOn(c: ShepherdCtx, pr: PullLite, actor: string, how: "on" | "
   await conflictCheck(c, pr);
 }
 
+// ---------------- checks on the head (L4 baseline) ----------------
+
+/** Check names the base branch requires: branch protection plus rulesets, unioned. Null when neither can be read or both are empty. */
+async function requiredChecks(c: ShepherdCtx, base: string): Promise<string[] | null> {
+  const out = new Set<string>();
+  try {
+    const b = (await c.ok.rest.repos.getBranch({ ...c.repo, branch: base })).data as { protection?: { required_status_checks?: { contexts?: string[]; checks?: { context?: string }[] } } };
+    const r = b.protection?.required_status_checks;
+    for (const x of r?.contexts ?? []) out.add(x);
+    for (const x of r?.checks ?? []) if (x.context) out.add(x.context);
+  } catch (e) { c.log.info(`Branch protection of ${base} is not readable (${(e as { status?: number }).status ?? "error"}).`); }
+  try {
+    const rules = (await c.ok.rest.repos.getBranchRules({ ...c.repo, branch: base, per_page: 100 })).data as unknown as { type: string; parameters?: { required_status_checks?: { context?: string }[] } }[];
+    for (const rule of rules) if (rule.type === "required_status_checks") for (const x of rule.parameters?.required_status_checks ?? []) if (x.context) out.add(x.context);
+  } catch (e) { c.log.info(`Rulesets of ${base} are not readable (${(e as { status?: number }).status ?? "error"}).`); }
+  return out.size ? [...out] : null;
+}
+
+/** Names of Shepherd's own workflow jobs (this run's jobs, plus the workflow name): never counted as failing checks. */
+async function selfCheckNames(c: ShepherdCtx): Promise<string[]> {
+  const out = new Set<string>(c.self?.name ? [c.self.name] : []);
+  if (c.self?.runId) {
+    try {
+      for (const j of await c.ok.paginate(c.ok.rest.actions.listJobsForWorkflowRun, { ...c.repo, run_id: Number(c.self.runId), per_page: 100 })) out.add(j.name);
+    } catch (e) { warn(c, `Could not list the jobs of the Shepherd run: ${(e as Error).message}`); }
+  }
+  return [...out];
+}
+
+/** Failing and pending checks on the PR head across all workflows and statuses; required checks when the base names them, else all but Shepherd's own. */
+async function checkTally(c: ShepherdCtx, pr: PullLite): Promise<CheckTally> {
+  const ref = pr.head.sha;
+  const runs = await c.ok.paginate(c.ok.rest.checks.listForRef, { ...c.repo, ref, per_page: 100 });
+  const statuses = await c.ok.paginate(c.ok.rest.repos.listCommitStatusesForRef, { ...c.repo, ref, per_page: 100 });
+  const required = await requiredChecks(c, pr.base.ref);
+  const t = countFailingChecks(
+    runs.map((r) => ({ id: r.id, name: r.name, status: r.status, conclusion: r.conclusion })),
+    statuses.map((x) => ({ id: x.id, context: x.context, state: x.state })),
+    required, await selfCheckNames(c),
+  );
+  c.log.info(`Checks on ${ref.slice(0, 7)}: ${t.failing} failing, ${t.pending} pending (${required ? `${required.length} required` : "all non-Shepherd checks"}).`);
+  return t;
+}
+
 // ---------------- CI failures ----------------
 
 const FAILED = new Set(["failure", "timed_out", "cancelled", "startup_failure"]);
@@ -347,15 +391,18 @@ async function onWorkflowRun(c: ShepherdCtx, p: ShepherdPayload): Promise<void> 
     fps.push(fingerprintFailure(j.name, logs[j.name]!));
   }
   const cantFix = classifyFailure(failedJobs.map((j) => ({ name: j.name, conclusion: j.conclusion })), logs, (f) => isProtectedPath(f, c.cfg));
+  const checks = await checkTally(c, pr);
   const d = decide({
     needsHuman: false, on: true, maxAttempts: c.cfg.shepherd.max_attempts, grants: state?.grants, history: hist, headSha: pr.head.sha, runAttempt,
-    conclusion: run.conclusion, failures: fps, cantFix, rerunRequested,
+    conclusion: run.conclusion, failures: fps, cantFix, rerunRequested, checks,
     stateFingerprints: state?.entries.flatMap((e) => e.fingerprints ?? []),
   });
-  return act(c, pr, d, { runUrl, runId: run.id, fps, logs, hist, cap: capOf(c, state) });
+  return act(c, pr, d, { runUrl, runId: run.id, fps, logs, hist, cap: capOf(c, state), before: Math.max(1, checks.failing) });
 }
 
-interface FailCtx { runUrl: string; runId: number; fps: Fingerprint[]; logs: Record<string, string>; hist: ShepherdHistory; cap: number }
+interface FailCtx { runUrl: string; runId: number; fps: Fingerprint[]; logs: Record<string, string>; hist: ShepherdHistory; cap: number;
+  /** Failing checks on the head before the fix (L4 baseline, trailer `MergeJudge-Shepherd-Failures`); at least 1, as the run itself failed. */
+  before: number }
 
 async function act(c: ShepherdCtx, pr: PullLite, d: Decision, f: FailCtx): Promise<void> {
   const n = pr.number;
@@ -487,7 +534,7 @@ async function fixCi(c: ShepherdCtx, pr: PullLite, attempt: number, f: FailCtx):
     const job = f.fps[0]?.job ?? "CI";
     const message = buildCommitMessage({
       subject: `shepherd: fix ${job} (attempt ${attempt}/${f.cap})`, attempt, kind: "ci",
-      fingerprints: f.fps.map((x) => x.hash), failures: failureCount(f.fps),
+      fingerprints: f.fps.map((x) => x.hash), failures: f.before,
     });
     const sha = await commitStaged(c.cwd, message, c.identity ?? DEFAULT_IDENTITY);
     const pushed = await pushHead(c.cwd, pr.head.ref, { token: c.token, serverUrl: c.serverUrl, onSecret: c.onSecret });

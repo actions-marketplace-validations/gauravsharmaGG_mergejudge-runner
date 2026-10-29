@@ -5,7 +5,7 @@ import { parse } from "yaml";
 import { parseConfig } from "../core/config.js";
 import { isProtectedPath } from "../core/shepherd.js";
 import {
-  buildCommitMessage, classifyFailure, countFailingTests, decide, failureCount, firstFailureLine, fingerprintFailure, isGreen, isShepherdCommitMessage,
+  buildCommitMessage, classifyFailure, countFailingChecks, countFailingTests, decide, failureCount, firstFailureLine, fingerprintFailure, isGreen, isShepherdCommitMessage,
   normalizeError, parseAttemptCommit, referencedFiles, shepherdHistory, tailLog, type DecideInput, type Fingerprint,
 } from "../core/shepherdfail.js";
 import { classifyConflictFile, isLockfile, mergeImportHunk, parseConflicts, unionLines } from "../core/shepherdconflict.js";
@@ -69,6 +69,61 @@ describe("error fingerprint normalisation", () => {
   });
   it("lists files a log references", () => {
     expect(referencedFiles("at /home/runner/work/r/r/src/a.ts:3:4\n./lib/b.py:9 failed\nnode_modules/x/y.js")).toEqual(["src/a.ts", "lib/b.py"]);
+  });
+});
+
+describe("countFailingChecks (L4 baseline)", () => {
+  const run = (name: string, conclusion: string | null, id?: number, status = conclusion ? "completed" : "in_progress") => ({ id, name, status, conclusion });
+  const st = (context: string, state: string, id?: number) => ({ id, context, state });
+
+  it("counts failing required checks across check runs and statuses", () => {
+    const runs = [run("build", "failure"), run("lint", "success"), run("docs", "failure")];
+    const statuses = [st("ext/ci", "error"), st("ext/other", "success")];
+    expect(countFailingChecks(runs, statuses, ["build", "lint", "ext/ci", "ext/other"])).toEqual({ failing: 2, pending: 0 });
+    expect(countFailingChecks(runs, statuses, ["lint"])).toEqual({ failing: 0, pending: 0 });
+  });
+  it("failing means failure, timed_out, cancelled, action_required, startup_failure (runs) or failure, error (statuses)", () => {
+    const runs = ["failure", "timed_out", "cancelled", "action_required", "startup_failure", "success", "skipped", "neutral"].map((c, i) => run(`r${i}`, c));
+    expect(countFailingChecks(runs, [], null).failing).toBe(5);
+    expect(countFailingChecks([], ["failure", "error", "success"].map((x, i) => st(`s${i}`, x)), null).failing).toBe(2);
+  });
+  it("without required checks every check counts except Shepherd's own", () => {
+    const runs = [run("build", "failure"), run("shepherd-job", "failure"), run("other", "failure")];
+    expect(countFailingChecks(runs, [st("ext/ci", "failure")], null, [])).toEqual({ failing: 4, pending: 0 });
+    expect(countFailingChecks(runs, [st("ext/ci", "failure")], null, ["shepherd-job"])).toEqual({ failing: 3, pending: 0 });
+  });
+  it("the latest check run per name and the latest status per context win", () => {
+    const runs = [run("build", "failure", 1), run("build", "success", 2), run("lint", "success", 5), run("lint", "failure", 3)];
+    expect(countFailingChecks(runs, [], null).failing).toBe(0);
+    expect(countFailingChecks([run("build", "success", 2), run("build", "failure", 1)], [], null).failing).toBe(0);
+    expect(countFailingChecks([run("build", "success", 1), run("build", "failure", 2)], [], null).failing).toBe(1);
+    expect(countFailingChecks([], [st("ci", "failure", 1), st("ci", "success", 2)], null).failing).toBe(0);
+    expect(countFailingChecks([], [st("ci", "success", 4), st("ci", "failure", 3)], null).failing).toBe(0);
+  });
+  it("unfinished check runs and pending statuses are pending, not failing", () => {
+    expect(countFailingChecks([run("a", null), run("b", "failure")], [st("ext", "pending")], null)).toEqual({ failing: 1, pending: 2 });
+    expect(countFailingChecks([run("a", null)], [], ["b"])).toEqual({ failing: 0, pending: 0 });
+    expect(countFailingChecks([run("a", null)], [], null, ["a"])).toEqual({ failing: 0, pending: 0 });
+  });
+});
+
+describe("decide() with checks on the head", () => {
+  const fp: Fingerprint = { job: "test", hash: "new", line: "new", raw: "new", tests: null };
+  const latest = { sha: "H", attempt: 1, kind: "ci" as const, fingerprints: ["old"], failures: 3 };
+  const base: DecideInput = {
+    needsHuman: false, on: true, maxAttempts: 3, history: { records: [latest], attempts: 1, latest }, headSha: "H", runAttempt: 2, conclusion: "failure",
+    failures: [fp], cantFix: { kind: "code" }, rerunRequested: false,
+  };
+  it("L4 compares the failing checks on the head, not this run's failures", () => {
+    expect(decide({ ...base, checks: { failing: 3, pending: 0 } })).toMatchObject({ action: "handoff", rule: RULE.L4 });
+    expect(decide({ ...base, checks: { failing: 2, pending: 0 } })).toEqual({ action: "fix", attempt: 2 });
+    expect(decide({ ...base, failures: [fp, { ...fp, hash: "n2" }, { ...fp, hash: "n3" }], checks: { failing: 1, pending: 0 } }).action).toBe("fix");
+  });
+  it("pending checks mean skip, after the loop breakers that need no full picture", () => {
+    expect(decide({ ...base, checks: { failing: 1, pending: 1 } })).toMatchObject({ action: "skip" });
+    expect(decide({ ...base, history: { ...base.history, latest: null, records: [], attempts: 0 }, checks: { failing: 1, pending: 2 } }).action).toBe("skip");
+    expect(decide({ ...base, failures: [{ ...fp, hash: "old" }], checks: { failing: 1, pending: 1 } })).toMatchObject({ rule: RULE.L2 });
+    expect(decide({ ...base, grants: 0, maxAttempts: 1, checks: { failing: 1, pending: 1 } })).toMatchObject({ action: "skip" });
   });
 });
 

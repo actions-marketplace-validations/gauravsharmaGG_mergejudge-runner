@@ -433,6 +433,86 @@ describe("retry grants (/mergejudge shepherd retry)", () => {
   });
 });
 
+describe("L4 baseline across all checks on the head", () => {
+  const job = (id: number, name: string, tag: string) => ({ id, name, conclusion: "failure", log: failLog(`TypeError: ${tag} broke ${name}`) });
+  const reply = () => { let v = 6; return textProvider(() => files("src/a.ts", `export const a = ${++v};\n`)); };
+  const failed = (name: string, id?: number) => ({ id, name, status: "completed", conclusion: "failure" });
+
+  it("a fix that shrinks its own workflow but makes another required check fail does not shrink the total: L4", async () => {
+    const { repo, gh, run } = setup({ jobs: [job(1, "j1", "first"), job(2, "j2", "first")], protection: { contexts: ["j1", "j2"], checks: [{ context: "ext/ci" }] } }, { provider: reply() });
+    await run(wr(gh));
+    expect(tipMsg(repo)).toContain("MergeJudge-Shepherd-Failures: 2");
+    const c1 = repo.tip("feature");
+    gh.st.jobs = [job(1, "j1", "second")]; // its own workflow went from 2 failing jobs to 1 ...
+    gh.st.statuses = [{ id: 1, context: "ext/ci", state: "failure" }]; // ... but an external required status now fails
+    await run(wr(gh, { id: 101 }));
+    expect(repo.tip("feature")).toBe(c1);
+    const b = handoffs(gh.st)[0]!.body;
+    expect(b).toContain("Loop breaker L4");
+    expect(b).toContain("2 before, 2 now");
+  });
+
+  it("the same fix with the external status passing continues to the next attempt", async () => {
+    const { repo, gh, run } = setup({ jobs: [job(1, "j1", "first"), job(2, "j2", "first")], protection: { contexts: ["j1", "j2", "ext/ci"] } }, { provider: reply() });
+    await run(wr(gh));
+    const c1 = repo.tip("feature");
+    gh.st.jobs = [job(1, "j1", "second")];
+    gh.st.statuses = [{ id: 1, context: "ext/ci", state: "success" }];
+    await run(wr(gh, { id: 101 }));
+    expect(repo.tip("feature")).not.toBe(c1);
+    expect(tipMsg(repo)).toContain("MergeJudge-Shepherd-Failures: 1");
+  });
+
+  it("unreadable branch protection and rulesets (403) fall back to every non-Shepherd check", async () => {
+    const { repo, gh, ctx, run } = setup(
+      { jobs: [job(1, "test", "first")], protection: "forbidden", rules: "forbidden", selfRunId: 555, selfJobs: [{ id: 9, name: "shepherd-job", conclusion: null }],
+        checkRuns: [failed("test", 1), failed("unrelated", 2), { id: 3, name: "shepherd-job", status: "in_progress", conclusion: null }] },
+      { provider: reply(), self: { name: "Shepherd", ref: "o/r/.github/workflows/shepherd.yml@refs/heads/main", runId: 555 } });
+    await run(wr(gh));
+    expect(tipMsg(repo)).toContain("MergeJudge-Shepherd-Failures: 2"); // test + unrelated; Shepherd's own running job is neither failing nor pending
+    const log = ctx.lines.join("\n");
+    expect(log).toContain("not readable (403)");
+    expect(log).toContain("2 failing, 0 pending (all non-Shepherd checks)");
+  });
+
+  it("required checks are the union of branch protection and rulesets", async () => {
+    const { repo, gh, ctx, run } = setup(
+      { jobs: [job(1, "test", "first")], protection: { contexts: ["lint"] }, rules: ["test"], checkRuns: [failed("test", 1), failed("lint", 2), failed("optional", 3)] },
+      { provider: reply() });
+    await run(wr(gh));
+    expect(tipMsg(repo)).toContain("MergeJudge-Shepherd-Failures: 2");
+    expect(ctx.lines.join("\n")).toContain("2 failing, 0 pending (2 required)");
+  });
+
+  it("a check that is still pending means no decision: logged, nothing pushed, no hand-off", async () => {
+    const calls = { n: 0 };
+    const { repo, gh, ctx, run } = setup(
+      { jobs: [job(1, "test", "first")], checkRuns: [failed("test", 1), { id: 2, name: "slow", status: "in_progress", conclusion: null }] },
+      { provider: textProvider(files("src/a.ts", "export const a = 7;\n"), calls) });
+    const tip = repo.tip("feature");
+    await run(wr(gh));
+    expect(repo.tip("feature")).toBe(tip);
+    expect(calls.n).toBe(0);
+    expect(handoffs(gh.st)).toHaveLength(0);
+    expect(gh.st.labels.has("needs-human")).toBe(false);
+    expect(ctx.lines.join("\n")).toContain("still running");
+    gh.st.checkRuns = [failed("test", 1), { id: 3, name: "slow", status: "completed", conclusion: "success" }]; // the next event sees the full picture
+    await run(wr(gh, { id: 101 }));
+    expect(repo.tip("feature")).not.toBe(tip);
+  });
+
+  it("a pending status after a fix also waits instead of calling L4", async () => {
+    const { repo, gh, run } = setup({ jobs: [job(1, "j1", "first"), job(2, "j2", "first")] }, { provider: reply() });
+    await run(wr(gh));
+    const c1 = repo.tip("feature");
+    gh.st.jobs = [job(1, "j1", "second"), job(2, "j2", "second")];
+    gh.st.statuses = [{ id: 1, context: "ext/ci", state: "pending" }];
+    await run(wr(gh, { id: 101 }));
+    expect(repo.tip("feature")).toBe(c1);
+    expect(handoffs(gh.st)).toHaveLength(0);
+  });
+});
+
 describe("L5 review path", () => {
   const patch = "@@ -1,2 +1,3 @@\n keep\n+const token = readSecret();\n+return token;";
   const reply = JSON.stringify({ summary: "s", files: [{ path: "a.ts", lane: "review", findings: [{ line: 2, quote: "const token = readSecret();", message: "m", suggestion: "const token = readSecret(ctx);" }] }] });
@@ -589,7 +669,7 @@ describe("entry points: needs-human, re-enable, permissions, rule 7", () => {
     const { gh, run } = setup({ checkRuns: [{ name: "ci", status: "completed", conclusion: "success" }, { name: "mergejudge/lane", status: "completed", conclusion: "failure" }] });
     await run({ action: "synchronize", pull_request: { number: 7 } }, "pull_request");
     expect(stateComment(gh.st)?.body ?? "").not.toContain("Checks pass");
-    gh.st.checkRuns[1]!.conclusion = "neutral";
+    gh.st.checkRuns![1]!.conclusion = "neutral";
     await run({ action: "synchronize", pull_request: { number: 7 } }, "pull_request");
     expect(lastState(gh.st).status).toBe("green");
     expect(gh.st.calls.filter((c) => c === "createComment")).toHaveLength(1);

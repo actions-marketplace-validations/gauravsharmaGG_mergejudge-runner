@@ -128,7 +128,7 @@ async function shepherdCtx(log: ReturnType<typeof logs>): Promise<ShepherdCtx> {
     serverUrl: process.env.GITHUB_SERVER_URL,
     identity: { name: core.getInput("shepherd_commit_name") || "mergejudge-shepherd[bot]", email: core.getInput("shepherd_commit_email") || "mergejudge-shepherd[bot]@users.noreply.github.com" },
     fixCommand: core.getInput("shepherd_fix_command") || undefined,
-    self: { name: process.env.GITHUB_WORKFLOW, ref: process.env.GITHUB_WORKFLOW_REF },
+    self: { name: process.env.GITHUB_WORKFLOW, ref: process.env.GITHUB_WORKFLOW_REF, runId: process.env.GITHUB_RUN_ID },
     onSecret: (s) => { remember(s); core.setSecret(s); },
   };
 }

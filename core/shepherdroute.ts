@@ -13,7 +13,7 @@ interface Routable {
 
 /**
  * `mode: auto`: which mode handles this event. Shepherd gets only what it owns: `/mergejudge shepherd` commands on PRs,
- * `shepherd` and `needs-human` label changes, and workflow_run / check_suite / status. Everything else keeps its old route.
+ * `shepherd` and `needs-human` label changes, and workflow_run / check_suite / status / push. Everything else keeps its old route.
  */
 export function routeAutoMode(event: string, p: Routable): ActionMode {
   if (event === "issue_comment") {
@@ -21,7 +21,9 @@ export function routeAutoMode(event: string, p: Routable): ActionMode {
     const human = p.comment?.user?.type !== "Bot" && p.sender?.type !== "Bot" && !body.includes(SHEPHERD_MARKER) && !body.includes(HANDOFF_MARKER);
     return p.issue?.pull_request && human && parseShepherdCommand(body) ? "shepherd" : "feedback";
   }
-  if (event === "workflow_run" || event === "check_suite" || event === "status") return "shepherd";
+  // `push` (the base branch moved) is Shepherd's conflict sweep. `schedule` and `workflow_dispatch` keep their old route (propose);
+  // a Shepherd sweep workflow sets `mode: shepherd` for them.
+  if (event === "workflow_run" || event === "check_suite" || event === "status" || event === "push") return "shepherd";
   if (event === "pull_request" && (p.action === "labeled" || p.action === "unlabeled")) {
     const l = (p.label?.name ?? "").toLowerCase();
     if (l === SHEPHERD_LABEL || l === NEEDS_HUMAN_LABEL) return "shepherd";

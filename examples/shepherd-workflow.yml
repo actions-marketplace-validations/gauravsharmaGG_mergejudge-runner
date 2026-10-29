@@ -15,6 +15,18 @@ on:
   # A finished external status (a deploy preview, a third-party CI) lets Shepherd decide on a failure it was holding back
   # while checks were still pending. Pending statuses are ignored.
   status:
+  # The base branch moved. GitHub never starts pull_request runs for a PR that conflicts with its base, so without this
+  # nothing would notice a shepherded PR that a merge to main made conflicting. Shepherd then looks at the open PRs based on
+  # the pushed branch (same repo, not draft, `shepherd` label or on in its state, no `needs-human`), waits for GitHub to
+  # compute their mergeable state, and runs its normal conflict check on the ones that conflict (at most 10 PRs per run).
+  # Change the branch list to your base branches. Shepherd ignores pushes it made itself.
+  push:
+    branches: [main]
+  # Optional: also sweep on a timer and by hand (Actions tab, "Run workflow"), for example to catch a PR whose conflict
+  # state GitHub had not computed yet at push time. A schedule/manual sweep looks at PRs of every base branch.
+  # schedule:
+  #   - cron: "17 */6 * * *"
+  workflow_dispatch:
 
 # contents: write to push fixes, pull-requests/issues for labels and comments,
 # checks and actions: read to see failures, actions: write only so Shepherd can re-run a failed job once to rule out a flaky test.
@@ -33,7 +45,9 @@ permissions:
 #   check_suite                        the first PR of the suite (check_suite.pull_requests[0].number)
 #   status                             no PR number is sent: the commit sha. A status run can overlap a PR run for the same
 #                                      head; that is safe, see below
-#   any event without a PR             the head branch of a workflow_run that lists no PR, else the commit sha or ref
+#   push, schedule, workflow_dispatch  the ref (refs/heads/main): one sweep group per branch. A sweep covers many PRs, so it
+#                                      cannot take one PR's key; it can overlap a PR run, which is safe, see below
+#   a workflow_run that lists no PR    its head branch
 # GitHub keeps ONE running and ONE pending run per group: a newer pending run replaces (cancels) an older pending one.
 # Shepherd stays correct when that happens, because every run re-reads the PR (labels, commits, checks, the state comment)
 # and decides from that, not from the event that started it. The one thing a replaced run can lose is a comment command
@@ -51,9 +65,11 @@ jobs:
       (github.event_name == 'issue_comment' && github.event.issue.pull_request) ||
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.head_repository.full_name == github.repository) ||
-      (github.event_name == 'status' && github.event.state != 'pending')
+      (github.event_name == 'status' && github.event.state != 'pending') ||
+      github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
-      # Check out the PR branch with full history. For comment events there is no PR ref, so Shepherd fetches the branch itself.
+      # Full history. For comment events and the push/schedule sweep the checkout is the default or base branch, not the PR
+      # branch, so Shepherd fetches the PR branch itself.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0

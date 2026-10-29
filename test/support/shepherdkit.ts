@@ -63,7 +63,7 @@ export function makeRepo(files: Record<string, string> = { "src/a.ts": "export c
 export interface FakeJob { id: number; name: string; conclusion: string | null; log: string }
 export interface GhState {
   labels: Set<string>;
-  comments: { id: number; body: string; user: { type: string; login: string } }[];
+  comments: { id: number; issue?: number; body: string; user: { type: string; login: string } }[];
   /** Commit list for pulls.listCommits; default: git log of the bare repo's branch (oldest first). */
   commits?: () => { sha: string; commit: { message: string } }[];
   jobs: FakeJob[];
@@ -118,11 +118,11 @@ export function fakeGh(repo: Repo3, over: Partial<GhState> = {}) {
         if (!st.labels.delete(p.name)) throw Object.assign(new Error("not found"), { status: 404 });
         return { data: [] };
       },
-      listComments: async () => ({ data: st.comments }),
-      createComment: async (p: { body: string }) => {
+      listComments: async (p?: { issue_number?: number }) => ({ data: st.comments.filter((c) => c.issue == null || p?.issue_number == null || c.issue === p.issue_number) }),
+      createComment: async (p: { body: string; issue_number?: number }) => {
         log("createComment");
         const id = nextId++;
-        st.comments.push({ id, body: p.body, user: { type: "Bot", login: "mj[bot]" } });
+        st.comments.push({ id, issue: p.issue_number, body: p.body, user: { type: "Bot", login: "mj[bot]" } });
         st.onCreate?.(id);
         return { data: { id } };
       },

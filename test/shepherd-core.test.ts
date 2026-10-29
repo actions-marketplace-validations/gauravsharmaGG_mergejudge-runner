@@ -389,6 +389,8 @@ describe("auto routing", () => {
     expect(routeAutoMode("issue_comment", c("<!-- mergejudge:shepherd-handoff -->\n/mergejudge shepherd"))).toBe("feedback");
   });
   it("labels, workflow_run and check_suite go to shepherd; the rest keeps its route", () => {
+    expect(routeAutoMode("push", {})).toBe("shepherd");
+    expect(routeAutoMode("schedule", {})).toBe("propose");
     expect(routeAutoMode("pull_request", { action: "labeled", label: { name: "Shepherd" } })).toBe("shepherd");
     expect(routeAutoMode("pull_request", { action: "unlabeled", label: { name: "needs-human" } })).toBe("shepherd");
     expect(routeAutoMode("pull_request", { action: "labeled", label: { name: "bug" } })).toBe("triage");

@@ -19,7 +19,7 @@ import {
 } from "../core/shepherd.js";
 import { classifyConflictFile, isLockfile, manifestOf, unionLines } from "../core/shepherdconflict.js";
 import {
-  buildCommitMessage, classifyFailure, countFailingChecks, decide, extractFailureSection, fingerprintFailure, isGreen, referencedFiles, shepherdHistory, tailLog,
+  buildCommitMessage, classifyFailure, countFailingChecks, decide, extractFailureSection, fingerprintFailure, isGreen, isShepherdCommitMessage, referencedFiles, shepherdHistory, tailLog,
   type CheckTally, type Decision, type Fingerprint, type ShepherdHistory,
 } from "../core/shepherdfail.js";
 import { HANDOFF_MARKER, NEEDS_HUMAN_LABEL, renderHandoff } from "../core/shepherdhandoff.js";
@@ -71,7 +71,7 @@ const sh = (cmd: string, cwd: string): Promise<RunResult> =>
 
 interface Sender { login?: string; type?: string }
 interface PullLite {
-  number: number; state: string; labels?: { name: string }[]; mergeable?: boolean | null;
+  number: number; state: string; labels?: { name: string }[]; mergeable?: boolean | null; mergeable_state?: string; draft?: boolean;
   head: { sha: string; ref: string; repo?: { full_name?: string } | null };
   base: { ref: string; repo: { full_name: string } };
 }
@@ -92,6 +92,10 @@ export interface ShepherdPayload {
   state?: string;
   context?: string;
   branches?: { name: string }[];
+  /** `push` event: the pushed ref (`refs/heads/main`), the head commit and whether the ref was deleted. */
+  ref?: string;
+  deleted?: boolean;
+  head_commit?: { message?: string } | null;
 }
 
 const isBot = (c: ShepherdCtx, s?: Sender) => !s || s.type === "Bot" || (s.login ?? "").endsWith("[bot]") || (!!c.botLogin && s.login === c.botLogin);
@@ -183,6 +187,7 @@ export async function runShepherd(c: ShepherdCtx, eventName: string, p: Shepherd
     case "workflow_run": return onWorkflowRun(c, p);
     case "check_suite": return onCheckSuite(c, p);
     case "status": return onStatus(c, p);
+    case "push": case "schedule": case "workflow_dispatch": return onSweep(c, eventName, p);
     default: c.log.info(`Shepherd ignores the ${eventName} event.`);
   }
 }
@@ -297,6 +302,64 @@ async function onHeadChanged(c: ShepherdCtx, pr: PullLite, skipConflict = false)
     await setState(c, pr.number, hist, (s) => ({ ...s, status: "watching" }));
   }
   if (!skipConflict && !green) await conflictCheck(c, pr);
+}
+
+// ---------------- base branch moved: sweep ----------------
+
+/** Most shepherded PRs one sweep looks at; the rest wait for the next push or schedule. */
+export const SWEEP_MAX_PRS = 10;
+/** Most open PRs one sweep reads at all (labels come with the list; a state comment costs one call each). */
+const SWEEP_MAX_SCAN = 100;
+/** GitHub computes `mergeable` asynchronously and answers null at first: poll with a short backoff, then give up (7 s at most). */
+const MERGEABLE_BACKOFF_MS = [1000, 2000, 4000];
+
+/** A push made by Shepherd itself (rule 7): its own identity, or a commit carrying its trailer. */
+const ownPush = (c: ShepherdCtx, p: ShepherdPayload) =>
+  isShepherdCommitMessage(p.head_commit?.message) || (!!c.botLogin && p.sender?.login === c.botLogin);
+
+async function mergeableOf(c: ShepherdCtx, n: number): Promise<PullLite> {
+  let pr = await loadPull(c, n);
+  for (const ms of MERGEABLE_BACKOFF_MS) {
+    if (pr.mergeable != null || pr.mergeable_state === "dirty") break;
+    await (c.sleep ?? ((t) => new Promise((r) => setTimeout(r, t))))(ms);
+    pr = await loadPull(c, n);
+  }
+  return pr;
+}
+
+/**
+ * The base branch moved (`push`), or a periodic `schedule` / `workflow_dispatch` sweep. GitHub starts no pull_request run for a
+ * PR that conflicts with its base, so nothing else would notice. Looks at open, non-draft, same-repo PRs that Shepherd is on
+ * for (label, or on in its state comment) and that have no needs-human; a push looks at PRs based on the pushed branch only.
+ * For each (at most SWEEP_MAX_PRS) it waits for GitHub to compute `mergeable` and runs conflictCheck when the PR conflicts.
+ * conflictCheck fetches and checks out the PR branch itself, as for comment events (the checkout here is the base branch).
+ */
+async function onSweep(c: ShepherdCtx, ev: string, p: ShepherdPayload): Promise<void> {
+  let base: string | undefined;
+  if (ev === "push") {
+    const m = /^refs\/heads\/(.+)$/.exec(p.ref ?? "");
+    if (!m || p.deleted) { c.log.info("push is not to a branch tip; ignoring."); return; }
+    if (ownPush(c, p)) { c.log.info("Ignoring a push made by Shepherd itself."); return; }
+    base = m[1];
+  }
+  const open = (await c.ok.paginate(c.ok.rest.pulls.list, { ...c.repo, state: "open", ...(base ? { base } : {}), sort: "created", direction: "asc", per_page: 100 })) as unknown as PullLite[];
+  let looked = 0, scanned = 0;
+  for (const raw of open) {
+    if (looked >= SWEEP_MAX_PRS || scanned >= SWEEP_MAX_SCAN) { c.log.info(`Sweep limit reached (${SWEEP_MAX_PRS} shepherded PRs per run); the rest wait for the next sweep.`); break; }
+    scanned++;
+    if (raw.draft || raw.state !== "open" || hasLabel(raw, NEEDS_HUMAN_LABEL)) continue;
+    if (!raw.head.repo?.full_name || raw.head.repo.full_name !== raw.base.repo.full_name) continue;
+    if (!hasLabel(raw, SHEPHERD_LABEL) && !(await readState(c, raw.number))?.on) continue;
+    looked++;
+    try {
+      const pr = await mergeableOf(c, raw.number);
+      if (pr.state !== "open") continue;
+      if (pr.mergeable === false || pr.mergeable_state === "dirty") await conflictCheck(c, pr.mergeable === false ? pr : { ...pr, mergeable: false });
+      else c.log.info(`#${pr.number} ${pr.mergeable ? "has no merge conflict" : "mergeable state is still unknown"}; the sweep leaves it.`);
+    } catch (e) {
+      warn(c, `Sweep of #${raw.number} failed: ${(e as Error).message}`);
+    }
+  }
 }
 
 // ---------------- on / off ----------------

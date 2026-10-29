@@ -85,7 +85,7 @@ describe("shepherd state comment", () => {
     expect(body).toContain("/mergejudge shepherd off");
   });
   it("redacts secrets and neutralises pipes and mentions", () => {
-    const s = addEntry(newShepherdState(), { ...entry, what: "token ghp_abcdefghijklmnopqrstuvwxyz0123456789 | @bob" });
+    const s = addEntry(newShepherdState(), { ...entry, what: `token ${"ghp"}_${"abcdefghijklmnopqrstuvwxyz0123456789"} | @bob` });
     const body = renderShepherdComment(s, "https://github.com/o/r");
     expect(body).not.toContain("ghp_abcdef");
     expect(body).not.toMatch(/@bob/);

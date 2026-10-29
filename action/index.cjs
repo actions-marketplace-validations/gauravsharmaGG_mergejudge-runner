@@ -58573,7 +58573,7 @@ var RULE_TITLE = {
   H4: "Hand-off H4: judgment call"
 };
 var RULE_QUESTION = {
-  L1: "Shepherd used all its fix attempts on this PR. Will you fix the remaining failure yourself, or do you want to raise `shepherd.max_attempts` on the base branch and re-enable?",
+  L1: "Shepherd used all its fix attempts on this PR. Will you fix the remaining failure yourself, or do you want to raise `shepherd.max_attempts` on the base branch and re-enable? To allow exactly one more attempt, comment `/mergejudge shepherd retry`.",
   L2: "The last fix left the same failure in place. Can you tell what the real cause is, or should this change be reworked?",
   L3: "Fixing one failure brings back another, so the two fixes fight each other. Which of the two behaviours should win?",
   L4: "The last fix did not reduce the number of failures. Should this change be reworked, or is another approach needed?",
@@ -58594,6 +58594,7 @@ var RULE_STATUS = {
   H3: "stopped",
   H4: "stopped"
 };
+var effectiveCap = (maxAttempts, grants = 0) => maxAttempts + Math.max(0, grants);
 
 // core/shepherdfail.ts
 var import_node_crypto2 = require("node:crypto");
@@ -58648,6 +58649,31 @@ ${line}`).digest("hex").slice(0, 10), line, raw, tests: countFailingTests(log) }
 }
 function failureCount(fps) {
   return fps.reduce((n, f) => n + 1 + (f.tests && f.tests > 0 ? f.tests : 0), 0);
+}
+var FAILING_RUN = /* @__PURE__ */ new Set(["failure", "timed_out", "cancelled", "action_required", "startup_failure"]);
+var FAILING_STATUS = /* @__PURE__ */ new Set(["failure", "error"]);
+function latestPer(items, key) {
+  const m = /* @__PURE__ */ new Map();
+  for (const t of items) {
+    const old = m.get(key(t));
+    if (!old || (t.id ?? 0) >= (old.id ?? 0)) m.set(key(t), t);
+  }
+  return [...m.values()];
+}
+function countFailingChecks(checkRuns, statuses, required2, excludeNames = []) {
+  const want = (name) => !excludeNames.includes(name) && (!required2 || required2.includes(name));
+  let failing = 0, pending = 0;
+  for (const r of latestPer(checkRuns, (x) => x.name)) {
+    if (!want(r.name)) continue;
+    if (r.status !== "completed") pending++;
+    else if (FAILING_RUN.has(r.conclusion ?? "")) failing++;
+  }
+  for (const s of latestPer(statuses, (x) => x.context)) {
+    if (!want(s.context)) continue;
+    if (s.state === "pending") pending++;
+    else if (FAILING_STATUS.has(s.state)) failing++;
+  }
+  return { failing, pending };
 }
 function tailLog(log, lines = 200, maxChars = 2e4) {
   const t = stripAnsi(log).split(/\r?\n/).slice(-lines).join("\n");
@@ -58749,6 +58775,7 @@ function decide(i) {
     return { action: "green" };
   }
   if (i.cantFix.kind === "cant-fix") return hand(i.cantFix.rule, `not a code problem: ${i.cantFix.reason}`);
+  const cap = effectiveCap(i.maxAttempts, i.grants);
   const latest = i.history.latest;
   const postFix = !!latest && latest.sha === i.headSha;
   const known = /* @__PURE__ */ new Set([...i.history.records.flatMap((r) => r.fingerprints), ...i.stateFingerprints ?? []]);
@@ -58759,13 +58786,15 @@ function decide(i) {
     const back = current.filter((h) => known.has(h));
     if (back.length) return hand(RULE.L3, `the fix brought back an earlier failure (fingerprint ${back[0]}) seen in an earlier attempt`);
   }
-  if (i.runAttempt === 1 && !i.rerunRequested && current.some((h) => !known.has(h)) && i.history.attempts < i.maxAttempts)
+  if (i.runAttempt === 1 && !i.rerunRequested && current.some((h) => !known.has(h)) && i.history.attempts < cap)
     return { action: "rerun", reason: "re-running failed jobs to rule out a flaky test" };
   if (postFix && latest?.failures != null) {
-    const now = failureCount(i.failures);
-    if (now >= latest.failures) return hand(RULE.L4, `the fix did not reduce the failures (${latest.failures} before, ${now} now)`);
+    if (i.checks && i.checks.pending > 0) return { action: "skip", reason: `${i.checks.pending} check(s) on the head are still running; L4 waits for the full picture and a later run or check suite will re-evaluate` };
+    const now = i.checks ? i.checks.failing : failureCount(i.failures);
+    if (now >= latest.failures) return hand(RULE.L4, `the fix did not reduce the failures across all checks (${latest.failures} before, ${now} now)`);
   }
-  if (i.history.attempts >= i.maxAttempts) return hand(RULE.L1, `all ${i.maxAttempts} fix attempts are used (${i.history.attempts}/${i.maxAttempts})`);
+  if (i.history.attempts >= cap) return hand(RULE.L1, `all ${cap} fix attempts are used (${i.history.attempts}/${cap})`);
+  if (i.checks && i.checks.pending > 0) return { action: "skip", reason: `${i.checks.pending} check(s) on the head are still running; no fix on a partial picture, a later run or check suite will re-evaluate` };
   return { action: "fix", attempt: i.history.attempts + 1 };
 }
 function isGreen(checkRuns, laneCheckName) {
@@ -58878,6 +58907,7 @@ var PING_PONG_RULE = RULE.L3;
 var SHEPHERD_LABEL = "shepherd";
 var SHEPHERD_MARKER = "<!-- mergejudge:shepherd";
 var isStateComment = (body) => /<!-- mergejudge:shepherd [^\s>-]/.test(body ?? "");
+var isOwnStateComment = (c, selfLogin) => isStateComment(c.body) && c.user?.type === "Bot" && (!selfLogin || c.user.login === selfLogin);
 var MAX_ENTRIES = 20;
 var FIELD_MAX = 300;
 var DEFAULT_PROTECTED_PATHS = [
@@ -58916,8 +58946,8 @@ function parseShepherdCommand(body) {
       continue;
     }
     if (fence) continue;
-    const m = line.match(/^\s*\/mergejudge\s+shepherd(?:\s+(on|off))?\s*$/i);
-    if (m) out = m[1]?.toLowerCase() === "off" ? "off" : "on";
+    const m = line.match(/^\s*\/mergejudge\s+shepherd(?:\s+(on|off|retry))?\s*$/i);
+    if (m) out = m[1] ? m[1].toLowerCase() : "on";
   }
   return out;
 }
@@ -58933,15 +58963,23 @@ var entrySchema = external_exports.object({
   run: external_exports.string().regex(/^https:\/\/[^\s<>()]+$/).max(300).optional(),
   fingerprints: external_exports.array(external_exports.string().regex(/^[0-9a-f]{6,16}$/)).max(10).optional()
 });
+var grantSchema = external_exports.object({ who: external_exports.string().max(100), at: external_exports.string().max(40), comment: external_exports.number().int().optional() });
 var stateSchema = external_exports.object({
   v: external_exports.literal(1),
   on: external_exports.boolean(),
   attempts: external_exports.number().int().min(0).max(1e3),
   maxAttempts: external_exports.number().int().min(1).max(10),
+  grants: external_exports.number().int().min(0).max(1e3).default(0),
+  grantLog: external_exports.array(grantSchema).default([]),
   status: external_exports.enum(STATUSES),
   entries: external_exports.array(entrySchema)
 });
-var newShepherdState = (maxAttempts = 3) => ({ v: 1, on: true, attempts: 0, maxAttempts, status: "watching", entries: [] });
+var newShepherdState = (maxAttempts = 3) => ({ v: 1, on: true, attempts: 0, maxAttempts, grants: 0, grantLog: [], status: "watching", entries: [] });
+function addGrant(state, g2) {
+  if (g2.comment != null && state.grantLog.some((x) => x.comment === g2.comment)) return state;
+  const who = g2.who.replace(/[^A-Za-z0-9_.\[\]-]/g, "").slice(0, 100);
+  return { ...state, grants: state.grants + 1, grantLog: [...state.grantLog, { who, at: g2.at, ...g2.comment != null ? { comment: g2.comment } : {} }].slice(-MAX_ENTRIES) };
+}
 var clean = (s, sanitize) => sanitize(String(s)).replace(/\s+/g, " ").trim().slice(0, FIELD_MAX);
 function addEntry(state, e, sanitize = (t) => redact(t)) {
   const entry = {
@@ -58983,7 +59021,7 @@ function renderShepherdComment(state, repoUrl2) {
     "MergeJudge watches this PR and keeps fixing it until checks and review pass.",
     "",
     `**Status:** ${STATUS_TEXT[state.status]}  `,
-    `**Fix attempts:** ${state.attempts}/${state.maxAttempts}`,
+    `**Fix attempts:** ${state.attempts}/${effectiveCap(state.maxAttempts, state.grants)}${state.grants ? ` (+${state.grants} granted)` : ""}`,
     ""
   ];
   if (state.entries.length) {
@@ -59005,9 +59043,9 @@ function renderShepherdComment(state, repoUrl2) {
   );
   return out.join("\n");
 }
-async function upsertShepherdComment(ok, r, pull, next) {
+async function upsertShepherdComment(ok, r, pull, next, selfLogin) {
   const comments = await ok.paginate(ok.rest.issues.listComments, { ...r, issue_number: pull, per_page: 100 });
-  const existing = comments.find((c) => isStateComment(c.body) && c.user?.type === "Bot");
+  const existing = comments.find((c) => isOwnStateComment(c, selfLogin));
   const state = typeof next === "function" ? next(parseShepherdState(existing?.body)) : next;
   const body = renderShepherdComment(state, `https://github.com/${r.owner}/${r.repo}`);
   if (existing) await ok.rest.issues.updateComment({ ...r, comment_id: existing.id, body });
@@ -59750,6 +59788,9 @@ async function startMerge(cwd, baseRef, id = DEFAULT_IDENTITY) {
   }
   return { state: "conflict", conflicted };
 }
+async function incomingPaths(cwd, headSha2) {
+  return (await g(cwd, ["diff", "--cached", "--name-only", "--no-renames", "-z", headSha2])).split("\0").filter(Boolean);
+}
 var mergeBase = (cwd, baseRef) => g(cwd, ["merge-base", "HEAD", `refs/remotes/origin/${baseRef}`]);
 async function changedByPr(cwd, base) {
   return new Set((await g(cwd, ["diff", "--name-only", "-z", base, "HEAD"])).split("\0").filter(Boolean));
@@ -59783,9 +59824,10 @@ async function removeLabel(c, n, label) {
 }
 async function readState(c, n) {
   const comments = await c.ok.paginate(c.ok.rest.issues.listComments, { ...c.repo, issue_number: n, per_page: 100 });
-  const mine = comments.find((x) => isStateComment(x.body) && x.user?.type === "Bot");
+  const mine = comments.find((x) => isOwnStateComment(x, c.botLogin));
   return parseShepherdState(mine?.body);
 }
+var capOf = (c, state) => effectiveCap(c.cfg.shepherd.max_attempts, state?.grants);
 async function history(c, n) {
   const commits = await c.ok.paginate(c.ok.rest.pulls.listCommits, { ...c.repo, pull_number: n, per_page: 100 });
   return shepherdHistory(commits.map((x) => ({ sha: x.sha, message: x.commit.message })));
@@ -59794,7 +59836,7 @@ async function setState(c, n, hist, edit) {
   return upsertShepherdComment(c.ok, c.repo, n, (prev) => {
     const base = prev ?? newShepherdState(c.cfg.shepherd.max_attempts);
     return edit({ ...base, attempts: hist.attempts, maxAttempts: c.cfg.shepherd.max_attempts });
-  });
+  }, c.botLogin);
 }
 async function note(c, n, hist, e, patch = {}) {
   return setState(c, n, hist, (s) => addEntry({ ...s, ...patch }, { at: nowIso(c), ...e }));
@@ -59876,8 +59918,12 @@ async function onComment(c, p) {
   }
   const pr = await loadPull(c, p.issue.number);
   if (cmd === "off") return turnOff(c, pr, login2);
-  if (pr.state !== "open") return;
+  if (pr.state !== "open") {
+    if (cmd === "retry") c.log.info(`#${pr.number} is closed; a retry grants nothing.`);
+    return;
+  }
   if (await refuseFork(c, pr)) return;
+  if (cmd === "retry") return turnOn(c, pr, login2, "retry", p.comment?.id);
   return turnOn(c, pr, login2);
 }
 async function onPullRequest(c, p) {
@@ -59953,17 +59999,63 @@ async function turnOff(c, pr, actor) {
   await note(c, pr.number, hist, { kind: "info", what: "Shepherd turned off", changed: "nothing", result: `Off, by ${actor}` }, { on: false, status: "off" });
   c.log.info(`Shepherd off for #${pr.number}.`);
 }
-async function turnOn(c, pr, actor, how = "on") {
+async function turnOn(c, pr, actor, how = "on", commentId) {
   if (!hasLabel(pr, SHEPHERD_LABEL)) await addLabel(c, pr.number, SHEPHERD_LABEL);
   if (hasLabel(pr, NEEDS_HUMAN_LABEL)) await removeLabel(c, pr.number, NEEDS_HUMAN_LABEL);
   const hist = await history(c, pr.number);
-  await note(c, pr.number, hist, { kind: "info", what: how === "on" ? "Shepherd turned on" : "Shepherd resumed", changed: "nothing", result: `Watching, by ${actor}` }, { on: true, status: "watching" });
+  const state = how === "retry" ? await setState(c, pr.number, hist, (s) => addEntry(addGrant({ ...s, on: true, status: "watching" }, { who: actor, at: nowIso(c), comment: commentId }), { at: nowIso(c), kind: "info", what: "Retry granted", changed: "nothing", result: `+1 fix attempt, by ${actor}` })) : await note(c, pr.number, hist, { kind: "info", what: how === "on" ? "Shepherd turned on" : "Shepherd resumed", changed: "nothing", result: `Watching, by ${actor}` }, { on: true, status: "watching" });
   c.log.info(`Shepherd ${how} for #${pr.number}.`);
-  if (hist.attempts >= c.cfg.shepherd.max_attempts) {
-    await handOff(c, pr.number, { rule: RULE.L1, reason: `all ${c.cfg.shepherd.max_attempts} fix attempts are already used on this PR (${hist.attempts}/${c.cfg.shepherd.max_attempts}); the count comes from Shepherd's own commits and is never reset` });
+  const cap = capOf(c, state);
+  if (hist.attempts >= cap) {
+    await handOff(c, pr.number, { rule: RULE.L1, reason: `all ${cap} fix attempts are already used on this PR (${hist.attempts}/${cap}); the count comes from Shepherd's own commits and is never reset` });
     return;
   }
   await conflictCheck(c, pr);
+}
+async function requiredChecks(c, base) {
+  const out = /* @__PURE__ */ new Set();
+  try {
+    const b = (await c.ok.rest.repos.getBranch({ ...c.repo, branch: base })).data;
+    const r = b.protection?.required_status_checks;
+    for (const x of r?.contexts ?? []) out.add(x);
+    for (const x of r?.checks ?? []) if (x.context) out.add(x.context);
+  } catch (e) {
+    c.log.info(`Branch protection of ${base} is not readable (${e.status ?? "error"}).`);
+  }
+  try {
+    const rules = (await c.ok.rest.repos.getBranchRules({ ...c.repo, branch: base, per_page: 100 })).data;
+    for (const rule of rules) if (rule.type === "required_status_checks") {
+      for (const x of rule.parameters?.required_status_checks ?? []) if (x.context) out.add(x.context);
+    }
+  } catch (e) {
+    c.log.info(`Rulesets of ${base} are not readable (${e.status ?? "error"}).`);
+  }
+  return out.size ? [...out] : null;
+}
+async function selfCheckNames(c) {
+  const out = new Set(c.self?.name ? [c.self.name] : []);
+  if (c.self?.runId) {
+    try {
+      for (const j of await c.ok.paginate(c.ok.rest.actions.listJobsForWorkflowRun, { ...c.repo, run_id: Number(c.self.runId), per_page: 100 })) out.add(j.name);
+    } catch (e) {
+      warn(c, `Could not list the jobs of the Shepherd run: ${e.message}`);
+    }
+  }
+  return [...out];
+}
+async function checkTally(c, pr) {
+  const ref = pr.head.sha;
+  const runs = await c.ok.paginate(c.ok.rest.checks.listForRef, { ...c.repo, ref, per_page: 100 });
+  const statuses = await c.ok.paginate(c.ok.rest.repos.listCommitStatusesForRef, { ...c.repo, ref, per_page: 100 });
+  const required2 = await requiredChecks(c, pr.base.ref);
+  const t = countFailingChecks(
+    runs.map((r) => ({ id: r.id, name: r.name, status: r.status, conclusion: r.conclusion })),
+    statuses.map((x) => ({ id: x.id, context: x.context, state: x.state })),
+    required2,
+    await selfCheckNames(c)
+  );
+  c.log.info(`Checks on ${ref.slice(0, 7)}: ${t.failing} failing, ${t.pending} pending (${required2 ? `${required2.length} required` : "all non-Shepherd checks"}).`);
+  return t;
 }
 var FAILED = /* @__PURE__ */ new Set(["failure", "timed_out", "cancelled", "startup_failure"]);
 async function findPull(c, run2) {
@@ -60010,7 +60102,7 @@ async function onWorkflowRun(c, p) {
   const runAttempt2 = run2.run_attempt ?? 1;
   const rerunRequested = !!state?.entries.some((e) => e.run?.endsWith(`/actions/runs/${run2.id}`) && /Re-running failed jobs/.test(e.result));
   if (run2.conclusion === "success") {
-    const d2 = decide({ needsHuman: false, on: true, maxAttempts: c.cfg.shepherd.max_attempts, history: hist, headSha: pr.head.sha, runAttempt: runAttempt2, conclusion: "success", failures: [], cantFix: { kind: "code" }, rerunRequested });
+    const d2 = decide({ needsHuman: false, on: true, maxAttempts: c.cfg.shepherd.max_attempts, grants: state?.grants, history: hist, headSha: pr.head.sha, runAttempt: runAttempt2, conclusion: "success", failures: [], cantFix: { kind: "code" }, rerunRequested });
     if (d2.action === "handoff") return handOff(c, n, { rule: d2.rule, reason: d2.reason, question: d2.question });
     return onHeadChanged(c, pr, true);
   }
@@ -60033,10 +60125,12 @@ async function onWorkflowRun(c, p) {
     fps.push(fingerprintFailure(j.name, logs2[j.name]));
   }
   const cantFix = classifyFailure(failedJobs.map((j) => ({ name: j.name, conclusion: j.conclusion })), logs2, (f) => isProtectedPath(f, c.cfg));
+  const checks = await checkTally(c, pr);
   const d = decide({
     needsHuman: false,
     on: true,
     maxAttempts: c.cfg.shepherd.max_attempts,
+    grants: state?.grants,
     history: hist,
     headSha: pr.head.sha,
     runAttempt: runAttempt2,
@@ -60044,9 +60138,10 @@ async function onWorkflowRun(c, p) {
     failures: fps,
     cantFix,
     rerunRequested,
+    checks,
     stateFingerprints: state?.entries.flatMap((e) => e.fingerprints ?? [])
   });
-  return act(c, pr, d, { runUrl, runId: run2.id, fps, logs: logs2, hist });
+  return act(c, pr, d, { runUrl, runId: run2.id, fps, logs: logs2, hist, cap: capOf(c, state), before: Math.max(1, checks.failing) });
 }
 async function act(c, pr, d, f) {
   const n = pr.number;
@@ -60188,11 +60283,11 @@ async function fixCi(c, pr, attempt, f) {
     }
     const job = f.fps[0]?.job ?? "CI";
     const message = buildCommitMessage({
-      subject: `shepherd: fix ${job} (attempt ${attempt}/${sc.max_attempts})`,
+      subject: `shepherd: fix ${job} (attempt ${attempt}/${f.cap})`,
       attempt,
       kind: "ci",
       fingerprints: f.fps.map((x) => x.hash),
-      failures: failureCount(f.fps)
+      failures: f.before
     });
     const sha = await commitStaged(c.cwd, message, c.identity ?? DEFAULT_IDENTITY);
     const pushed = await pushHead(c.cwd, pr.head.ref, { token: c.token, serverUrl: c.serverUrl, onSecret: c.onSecret });
@@ -60207,7 +60302,7 @@ async function fixCi(c, pr, attempt, f) {
       kind: "ci",
       what: `${job}: ${f.fps[0]?.raw ?? ""}`,
       changed: `${staged.files.join(", ")} (${staged.lines} lines). ${redact(fix.explanation)}`,
-      result: `Attempt ${attempt}/${sc.max_attempts} pushed; waiting for CI`,
+      result: `Attempt ${attempt}/${f.cap} pushed; waiting for CI`,
       commit: sha,
       run: f.runUrl,
       fingerprints: f.fps.map((x) => x.hash)
@@ -60229,14 +60324,20 @@ async function conflictCheck(c, prIn) {
   }
   const sc = c.cfg.shepherd, n = pr.number;
   const hist = await history(c, n);
-  if (hist.attempts >= sc.max_attempts) return handOff(c, n, { rule: RULE.L1, reason: `all ${sc.max_attempts} fix attempts are used (${hist.attempts}/${sc.max_attempts}), so the merge conflict is left to a human` });
+  const cap = capOf(c, await readState(c, n));
+  if (hist.attempts >= cap) return handOff(c, n, { rule: RULE.L1, reason: `all ${cap} fix attempts are used (${hist.attempts}/${cap}), so the merge conflict is left to a human` });
   if (!await checkoutHead(c.cwd, pr.head.ref, pr.head.sha)) {
     c.log.info(`Branch ${pr.head.ref} moved; skipping conflict work.`);
     return;
   }
   const attempt = hist.attempts + 1;
   const finish = async (touched, lines) => {
-    const message = buildCommitMessage({ subject: `shepherd: resolve merge conflicts with ${pr.base.ref} (attempt ${attempt}/${sc.max_attempts})`, attempt, kind: "conflict" });
+    const incoming = protectedHits(await incomingPaths(c.cwd, pr.head.sha), { shepherd: sc });
+    if (incoming.length) {
+      await resetClean(c.cwd);
+      return handOff(c, n, { rule: RULE.H1, reason: `merging ${pr.base.ref} would bring changes to protected files into this PR; the merge was aborted and nothing was pushed`, paths: incoming });
+    }
+    const message = buildCommitMessage({ subject: `shepherd: resolve merge conflicts with ${pr.base.ref} (attempt ${attempt}/${cap})`, attempt, kind: "conflict" });
     const sha = await commitStaged(c.cwd, message, c.identity ?? DEFAULT_IDENTITY);
     const pushed = await pushHead(c.cwd, pr.head.ref, { token: c.token, serverUrl: c.serverUrl, onSecret: c.onSecret });
     if (pushed === "rejected") {
@@ -60245,7 +60346,7 @@ async function conflictCheck(c, prIn) {
       return;
     }
     c.log.info(`Pushed merge ${sha.slice(0, 7)} resolving conflicts with ${pr.base.ref}.`);
-    await note(c, n, await history(c, n), { kind: "conflict", what: `Conflicts with ${pr.base.ref}`, changed: touched.length ? `${touched.join(", ")} (${lines} lines)` : "clean merge of the base branch", result: `Attempt ${attempt}/${sc.max_attempts} pushed; waiting for CI`, commit: sha }, { status: "watching" });
+    await note(c, n, await history(c, n), { kind: "conflict", what: `Conflicts with ${pr.base.ref}`, changed: touched.length ? `${touched.join(", ")} (${lines} lines)` : "clean merge of the base branch", result: `Attempt ${attempt}/${cap} pushed; waiting for CI`, commit: sha }, { status: "watching" });
   };
   try {
     const start = await startMerge(c.cwd, pr.base.ref, c.identity ?? DEFAULT_IDENTITY);
@@ -60541,7 +60642,7 @@ async function shepherdCtx(log) {
     serverUrl: process.env.GITHUB_SERVER_URL,
     identity: { name: getInput("shepherd_commit_name") || "mergejudge-shepherd[bot]", email: getInput("shepherd_commit_email") || "mergejudge-shepherd[bot]@users.noreply.github.com" },
     fixCommand: getInput("shepherd_fix_command") || void 0,
-    self: { name: process.env.GITHUB_WORKFLOW, ref: process.env.GITHUB_WORKFLOW_REF },
+    self: { name: process.env.GITHUB_WORKFLOW, ref: process.env.GITHUB_WORKFLOW_REF, runId: process.env.GITHUB_RUN_ID },
     onSecret: (s) => {
       remember(s);
       setSecret(s);

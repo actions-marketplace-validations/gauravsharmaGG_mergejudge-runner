@@ -83,15 +83,23 @@ describe("one state comment per PR (concurrency race)", () => {
 
 // ---------------- base branch moved: sweep ----------------
 
-interface SweepSpec { n: number; branch: string; labels?: string[]; draft?: boolean; base?: string; mergeable?: (boolean | null)[]; state?: string; fork?: boolean }
+interface SweepSpec { n: number; branch: string; labels?: string[]; draft?: boolean; base?: string; mergeable?: (boolean | null)[]; state?: string; fork?: boolean;
+  /** mergeable true: the merge commit was computed against the old main (stale), not the current tip. */
+  stale?: boolean;
+  /** Force a change that conflicts with main even when the last answer is true. */
+  conflicting?: boolean;
+  /** Report this head sha (not on origin) instead of the branch tip. */
+  headSha?: string }
+const mergeSha = (s: SweepSpec) => "c".repeat(36) + String(s.n).padStart(4, "0");
 const imports = (...n: string[]) => n.map((x) => `import ${x} from "${x}";`).join("\n") + "\n";
 
 /** PRs on real branches (each adds an import line to src/m.ts, or touches g.txt when `clean`), then main changes the same import line. */
 function sweepSetup(specs: SweepSpec[], ctxOver: Parameters<typeof makeCtx>[2] = {}) {
   const repo = makeRepo({ "src/m.ts": imports("z"), "g.txt": "1\n" });
+  const oldMain = repo.tip("main");
   for (const s of specs) {
     repo.branch(s.branch, "main");
-    repo.commit(s.branch, s.mergeable?.at(-1) === true ? { "g.txt": `pr ${s.n}\n` } : { "src/m.ts": imports("z", `p${s.n}`) }, `pr ${s.n}`);
+    repo.commit(s.branch, s.mergeable?.at(-1) === true && !s.conflicting ? { "g.txt": `pr ${s.n}\n` } : { "src/m.ts": imports("z", `p${s.n}`) }, `pr ${s.n}`);
   }
   repo.commit("main", { "src/m.ts": imports("z", "q") }, "base change");
   const gh = fakeGh(repo, { commits: () => [] });
@@ -99,8 +107,9 @@ function sweepSetup(specs: SweepSpec[], ctxOver: Parameters<typeof makeCtx>[2] =
   const polls: Record<number, number> = {};
   const shape = (s: SweepSpec, withMergeable: boolean) => ({
     number: s.n, state: s.state ?? "open", draft: !!s.draft, labels: (s.labels ?? ["shepherd"]).map((name) => ({ name })),
-    head: { sha: repo.tip(s.branch), ref: s.branch, repo: { full_name: s.fork ? "forker/r" : "o/r" } },
+    head: { sha: s.headSha ?? repo.tip(s.branch), ref: s.branch, repo: { full_name: s.fork ? "forker/r" : "o/r" } },
     base: { ref: s.base ?? "main", sha: repo.tip("main"), repo: { full_name: "o/r" } },
+    merge_commit_sha: mergeSha(s),
     ...(withMergeable ? (() => {
       const seq = s.mergeable ?? [false];
       const i = Math.min(polls[s.n] = (polls[s.n] ?? -1) + 1, seq.length - 1);
@@ -110,6 +119,14 @@ function sweepSetup(specs: SweepSpec[], ctxOver: Parameters<typeof makeCtx>[2] =
   const rest = gh.ok.rest as unknown as { pulls: Record<string, unknown> };
   rest.pulls.list = async (p: Record<string, unknown>) => { asked.push(p); return { data: specs.filter((s) => !p.base || (s.base ?? "main") === p.base).map((s) => shape(s, false)) }; };
   rest.pulls.get = async (p: { pull_number: number }) => ({ data: shape(specs.find((s) => s.n === p.pull_number)!, true) });
+  // The PR's merge commit has the base tip GitHub computed against as first parent: the current tip, or the old one when stale.
+  const repos = gh.ok.rest.repos as unknown as { getCommit: (p: { ref: string }) => Promise<unknown> };
+  const getCommit = repos.getCommit;
+  repos.getCommit = async (p) => {
+    const spec = specs.find((x) => p.ref === mergeSha(x));
+    return spec ? { data: { parents: [{ sha: spec.stale ? oldMain : repo.tip("main") }, { sha: repo.tip(spec.branch) }] } } : getCommit(p);
+  };
+  (gh.ok.rest as unknown as { git: unknown }).git = { getRef: async (p: { ref: string }) => ({ data: { object: { sha: repo.tip(p.ref.replace(/^heads\//, "")) } } }) };
   const slept: number[] = [];
   const ctx = makeCtx(repo, gh, { sleep: async (ms) => { slept.push(ms); }, ...ctxOver });
   const run = (ev: string, p: ShepherdPayload = {}) => runShepherd(ctx, ev, p);
@@ -144,13 +161,62 @@ describe("base branch moved: sweep", () => {
     expect(s.tip("conf")).not.toBe(before);
   });
 
-  it("gives up on a mergeable that stays null, after a capped wait", async () => {
+  it("a mergeable that stays null, after a capped wait, is decided by a local merge check", async () => {
     const s = sweepSetup([{ n: 11, branch: "conf", mergeable: [null] }]);
     const before = s.tip("conf");
     await s.run("push", push());
     expect(s.slept).toEqual([1000, 2000, 4000]);
+    expect(s.tip("conf")).not.toBe(before);
+    expect(s.ctx.lines.join("\n")).toContain("has not computed mergeable; checking the merge locally");
+  });
+
+  it("a stale mergeable true (merge commit built on the old main) is polled, then a local merge check finds the conflict", async () => {
+    const s = sweepSetup([{ n: 11, branch: "conf", mergeable: [true], stale: true, conflicting: true }]);
+    const before = s.tip("conf");
+    const old = git(s.repo.bare, "rev-parse", "refs/heads/main~1");
+    await s.run("push", push({ after: s.tip("main") }));
+    expect(s.slept).toEqual([1000, 2000, 4000]);
+    expect(s.tip("conf")).not.toBe(before);
+    expect(git(s.repo.bare, "log", "-1", "--format=%B", "refs/heads/conf")).toContain("MergeJudge-Shepherd-Kind: conflict");
+    const log = s.ctx.lines.join("\n");
+    expect(log).toContain(`#11: GitHub's mergeable answer is stale (computed against ${old.slice(0, 7)}, base is ${s.tip("main").slice(0, 7)})`);
+    expect(log).toContain("a local merge check");
+  });
+
+  it("a fresh mergeable true (first parent is the base tip) is trusted with no polling and no local check", async () => {
+    const s = sweepSetup([{ n: 11, branch: "ok", mergeable: [true], conflicting: true }]);
+    const before = s.tip("ok");
+    await s.run("schedule", {});
+    expect(s.slept).toEqual([]);
+    expect(s.tip("ok")).toBe(before);
+    const log = s.ctx.lines.join("\n");
+    expect(log).toContain("#11 has no merge conflict");
+    expect(log).not.toContain("locally");
+  });
+
+  it("a stale true that turns false on a later poll goes to the conflict work", async () => {
+    const s = sweepSetup([{ n: 11, branch: "conf", mergeable: [true, false], stale: true, conflicting: true }]);
+    const before = s.tip("conf");
+    await s.run("schedule", {});
+    expect(s.slept).toEqual([1000]);
+    expect(s.tip("conf")).not.toBe(before);
+    expect(s.ctx.lines.join("\n")).not.toContain("locally");
+  });
+
+  it("a stale true with a local check that cannot decide leaves the PR and says so", async () => {
+    const s = sweepSetup([{ n: 11, branch: "conf", mergeable: [true], stale: true, conflicting: true, headSha: "d".repeat(40) }]);
+    const before = s.tip("conf");
+    await s.run("push", push());
     expect(s.tip("conf")).toBe(before);
-    expect(s.ctx.lines.join("\n")).toContain("still unknown");
+    expect(s.ctx.lines.join("\n")).toContain("#11: the local merge check could not decide; the sweep leaves it.");
+  });
+
+  it("a stale true with a clean local merge is left", async () => {
+    const s = sweepSetup([{ n: 11, branch: "ok", mergeable: [true], stale: true }]);
+    const before = s.tip("ok");
+    await s.run("push", push());
+    expect(s.tip("ok")).toBe(before);
+    expect(s.ctx.lines.join("\n")).toContain("the local merge check finds no merge conflict");
   });
 
   it("a schedule sweep looks at every base branch and skips drafts, needs-human, forks and PRs Shepherd is not on for", async () => {

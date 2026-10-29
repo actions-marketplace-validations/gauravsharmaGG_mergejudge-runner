@@ -94,6 +94,8 @@ export interface ShepherdPayload {
   branches?: { name: string }[];
   /** `push` event: the pushed ref (`refs/heads/main`), the head commit and whether the ref was deleted. */
   ref?: string;
+  /** `push` event: the sha the ref points at after the push (the new base tip). */
+  after?: string;
   deleted?: boolean;
   head_commit?: { message?: string } | null;
 }
@@ -322,14 +324,52 @@ const MERGEABLE_BACKOFF_MS = [1000, 2000, 4000];
 const ownPush = (c: ShepherdCtx, p: ShepherdPayload) =>
   isShepherdCommitMessage(p.head_commit?.message) || (!!c.botLogin && p.sender?.login === c.botLogin);
 
-async function mergeableOf(c: ShepherdCtx, n: number): Promise<PullLite> {
+/** Why `mergeable` cannot be used: GitHub has not computed it (`unknown`), or computed it against an older base (`stale`). */
+interface Mergeable { pr: PullLite; gap?: "unknown" | "stale"; computedOn?: string }
+
+/**
+ * The base tip a `mergeable: true` answer was computed against: the first parent of the PR's merge commit. GitHub can keep
+ * answering true for many minutes after the base moved (it never goes back to null). Missing commit or error: "" (stale).
+ */
+async function mergeComputedOn(c: ShepherdCtx, pr: PullLite): Promise<string> {
+  const sha = (pr as { merge_commit_sha?: string | null }).merge_commit_sha;
+  if (!sha) return "";
+  try {
+    const { data } = await c.ok.rest.repos.getCommit({ ...c.repo, ref: sha });
+    return data.parents?.[0]?.sha ?? "";
+  } catch { return ""; }
+}
+
+/** Polls with the backoff while `mergeable` is null or stale (true, but not computed against `baseTip`); false / dirty are trusted. */
+async function mergeableOf(c: ShepherdCtx, n: number, baseTip?: string): Promise<Mergeable> {
   let pr = await loadPull(c, n);
-  for (const ms of MERGEABLE_BACKOFF_MS) {
-    if (pr.mergeable != null || pr.mergeable_state === "dirty") break;
-    await (c.sleep ?? ((t) => new Promise((r) => setTimeout(r, t))))(ms);
+  for (let i = 0; ; i++) {
+    let res: Mergeable = { pr, gap: "unknown" };
+    if (pr.mergeable === false || pr.mergeable_state === "dirty" || (pr.mergeable === true && !baseTip)) return { pr };
+    if (pr.mergeable === true) {
+      const computedOn = await mergeComputedOn(c, pr);
+      if (computedOn === baseTip) return { pr };
+      res = { pr, gap: "stale", computedOn };
+    }
+    if (i >= MERGEABLE_BACKOFF_MS.length) return res;
+    await (c.sleep ?? ((t) => new Promise((r) => setTimeout(r, t))))(MERGEABLE_BACKOFF_MS[i]!);
     pr = await loadPull(c, n);
   }
-  return pr;
+}
+
+const shq = (s: string) => "'" + s.split("'").join("'\\''") + "'";
+
+/** Decide the merge locally with `git merge-tree` (exit 1 = conflict, 0 = clean); anything else, including a failed fetch, is unknown. */
+async function localMergeCheck(c: ShepherdCtx, pr: PullLite, baseTip: string): Promise<"conflict" | "clean" | "unknown"> {
+  const head = pr.head.sha;
+  if (!/^[0-9a-f]{40,64}$/i.test(baseTip) || !/^[0-9a-f]{40,64}$/i.test(head)) return "unknown";
+  let got = await sh(`git fetch --no-tags origin ${baseTip} ${head}`, c.cwd);
+  if (got.code !== 0) got = await sh(`git fetch --no-tags origin ${shq(pr.base.ref)} ${shq(pr.head.ref)}`, c.cwd);
+  if (got.code !== 0) return "unknown";
+  // merge-tree can exit 1 for a bad object too: make sure both commits are really here before reading its exit code as a conflict.
+  if ((await sh(`git cat-file -e ${baseTip}^{commit} && git cat-file -e ${head}^{commit}`, c.cwd)).code !== 0) return "unknown";
+  const r = await sh(`git merge-tree --write-tree --no-messages ${baseTip} ${head}`, c.cwd);
+  return r.code === 1 ? "conflict" : r.code === 0 ? "clean" : "unknown";
 }
 
 /**
@@ -347,6 +387,15 @@ async function onSweep(c: ShepherdCtx, ev: string, p: ShepherdPayload): Promise<
     if (ownPush(c, p)) { c.log.info("Ignoring a push made by Shepherd itself."); return; }
     base = m[1];
   }
+  const baseTips = new Map<string, string | undefined>();
+  if (base && p.after && /^[0-9a-f]+$/i.test(p.after)) baseTips.set(base, p.after);
+  const tipOf = async (ref: string): Promise<string | undefined> => {
+    if (!baseTips.has(ref)) {
+      try { baseTips.set(ref, (await c.ok.rest.git.getRef({ ...c.repo, ref: `heads/${ref}` })).data.object.sha); }
+      catch (e) { warn(c, `Could not read the tip of ${ref}: ${(e as Error).message}`); baseTips.set(ref, undefined); }
+    }
+    return baseTips.get(ref);
+  };
   const open = (await c.ok.paginate(c.ok.rest.pulls.list, { ...c.repo, state: "open", ...(base ? { base } : {}), sort: "created", direction: "asc", per_page: 100 })) as unknown as PullLite[];
   let looked = 0, scanned = 0;
   for (const raw of open) {
@@ -357,8 +406,19 @@ async function onSweep(c: ShepherdCtx, ev: string, p: ShepherdPayload): Promise<
     if (!hasLabel(raw, SHEPHERD_LABEL) && !(await readState(c, raw.number))?.on) continue;
     looked++;
     try {
-      const pr = await mergeableOf(c, raw.number);
+      const baseTip = await tipOf(raw.base.ref);
+      const { pr, gap, computedOn } = await mergeableOf(c, raw.number, baseTip);
       if (pr.state !== "open") continue;
+      if (gap && baseTip) {
+        if (gap === "stale") c.log.info(`#${pr.number}: GitHub's mergeable answer is stale (computed against ${computedOn ? computedOn.slice(0, 7) : "an unknown base"}, base is ${baseTip.slice(0, 7)}); checking the merge locally.`);
+        else c.log.info(`#${pr.number}: GitHub has not computed mergeable; checking the merge locally.`);
+        const local = await localMergeCheck(c, pr, baseTip);
+        if (local === "conflict") {
+          c.log.info(`#${pr.number}: a local merge check of ${baseTip.slice(0, 7)} and ${pr.head.sha.slice(0, 7)} finds a merge conflict.`);
+          await conflictCheck(c, { ...pr, mergeable: false });
+        } else c.log.info(`#${pr.number}: ${local === "clean" ? "the local merge check finds no merge conflict" : "the local merge check could not decide"}; the sweep leaves it.`);
+        continue;
+      }
       if (pr.mergeable === false || pr.mergeable_state === "dirty") await conflictCheck(c, pr.mergeable === false ? pr : { ...pr, mergeable: false });
       else c.log.info(`#${pr.number} ${pr.mergeable ? "has no merge conflict" : "mergeable state is still unknown"}; the sweep leaves it.`);
     } catch (e) {

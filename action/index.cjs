@@ -27589,11 +27589,11 @@ var Summary = class {
    */
   addTable(rows) {
     const tableBody = rows.map((row) => {
-      const cells = row.map((cell) => {
-        if (typeof cell === "string") {
-          return this.wrap("td", cell);
+      const cells = row.map((cell2) => {
+        if (typeof cell2 === "string") {
+          return this.wrap("td", cell2);
         }
-        const { header, data, colspan, rowspan } = cell;
+        const { header, data, colspan, rowspan } = cell2;
         const tag = header ? "th" : "td";
         const attrs2 = Object.assign(Object.assign({}, colspan && { colspan }), rowspan && { rowspan });
         return this.wrap(tag, data, attrs2);
@@ -47450,13 +47450,13 @@ function _promise(Class2, innerType) {
 }
 // @__NO_SIDE_EFFECTS__
 function _custom(Class2, fn, _params) {
-  const norm4 = normalizeParams(_params);
-  norm4.abort ?? (norm4.abort = true);
+  const norm5 = normalizeParams(_params);
+  norm5.abort ?? (norm5.abort = true);
   const schema = new Class2({
     type: "custom",
     check: "custom",
     fn,
-    ...norm4
+    ...norm5
   });
   return schema;
 }
@@ -53969,6 +53969,16 @@ var DEFAULT_PR_TEMPLATE = {
   apply_to: "agents",
   missing_lane: "review"
 };
+var DEFAULT_SHEPHERD = { enabled: true, max_attempts: 3, protected_paths: [], suggestions: true };
+var shepherdSchema = external_exports.object({
+  enabled: external_exports.boolean().default(true),
+  /** Fix attempts per PR before Shepherd posts a summary and stops. */
+  max_attempts: external_exports.number().int().min(1).max(10).default(3),
+  /** Extra globs Shepherd never edits, added to the built-in protected paths (core/shepherd.ts). */
+  protected_paths: external_exports.array(external_exports.string()).default([]),
+  /** Tier 1: inline review comments carry "suggested changes" while Shepherd is on for the PR. */
+  suggestions: external_exports.boolean().default(true)
+}).default(DEFAULT_SHEPHERD);
 var configSchema = external_exports.object({
   provider: providerSchema,
   lanes: external_exports.object({
@@ -54054,6 +54064,7 @@ var configSchema = external_exports.object({
     apply_to: external_exports.enum(["agents", "all"]).default("agents"),
     missing_lane: external_exports.enum(["review", "block"]).default("review")
   }).default(DEFAULT_PR_TEMPLATE),
+  shepherd: shepherdSchema,
   /** Repo guidance files from the base tip. Empty list disables policy injection. */
   policy_files: external_exports.array(external_exports.string()).max(10).default(DEFAULT_POLICY_FILES),
   /** Globs of policy paths to skip even if listed in policy_files. */
@@ -54485,10 +54496,10 @@ function removesAuthCheck(patch) {
   return lines.some((l) => l.op === "del" && AUTH_CHECK.test(l.text));
 }
 function isMergeJudgeConfigPath(path2, extra = []) {
-  const norm4 = (p) => p.replace(/^\.\//, "").toLowerCase();
-  const base = norm4(path2).split("/").pop() ?? "";
+  const norm5 = (p) => p.replace(/^\.\//, "").toLowerCase();
+  const base = norm5(path2).split("/").pop() ?? "";
   if (base === ".mergejudge.yml" || base === ".mergejudge.yaml") return true;
-  return extra.some((e) => e && norm4(e) === norm4(path2));
+  return extra.some((e) => e && norm5(e) === norm5(path2));
 }
 var CODE_AUTO_NEVER_GLOBS = [".github/**", "**/.env*", "_headers", "**/_headers"];
 var ALWAYS_REVIEW_GLOBS = ["_headers", "**/_headers"];
@@ -54959,11 +54970,15 @@ var tok = (s) => (s ?? "").replace(/[^A-Za-z0-9._:/@+-]/g, "_").slice(0, 60);
 var attrs = (a) => Object.entries(a).filter(([, v]) => v).map(([k, v]) => ` ${k}=${encodeURIComponent(v)}`).join("");
 var marker = (key, state, extra = {}) => `${INLINE_MARKER} key=${encodeURIComponent(key)} state=${state}${attrs(extra)} -->`;
 function findingText(body) {
-  return body.replace(/<!--[\s\S]*?-->/g, "").replace(/^\s*(?:⚖️\s*)?\*\*MergeJudge \(LLM\):\*\*\s*/, "").replace(/\\([\\`*_{}\[\]()#+\-.!|<>~])/g, "$1").trim();
+  return body.replace(/\n*```suggestion\n[\s\S]*?\n```/g, "").replace(/<!--[\s\S]*?-->/g, "").replace(/^\s*(?:⚖️\s*)?\*\*MergeJudge \(LLM\):\*\*\s*/, "").replace(/\\([\\`*_{}\[\]()#+\-.!|<>~])/g, "$1").trim();
 }
 function inlineBody(f, ctx = {}) {
   return `${marker(keyOf(f.path, f.line), "active", { sha: tok(ctx.sha), rv: tok(ctx.reviewer) })}
-\u2696\uFE0F **MergeJudge (LLM):** ${escapeMd(f.message)}`;
+\u2696\uFE0F **MergeJudge (LLM):** ${escapeMd(f.message)}${f.suggestion ? `
+
+\`\`\`suggestion
+${f.suggestion}
+\`\`\`` : ""}`;
 }
 function resolvedBody(key, prev = {}, ctx = {}) {
   const orig = (prev.text ?? "").replace(/\s+/g, " ").trim().slice(0, ORIG_MAX_CHARS);
@@ -57451,6 +57466,8 @@ var codeAutoPrompt = (files, cfg) => codeAutoCandidates(files, cfg).size ? `
 
 ${CODE_AUTO_RULES}` : "";
 var POLICY_DELIM = "repo_policy";
+var SUGGESTION_RULES = `Suggested changes: for a finding that has a "line" and a "quote", you may add an optional "suggestion" field to that finding: the exact replacement text for that one line (the line the quote is on), only when you are sure of a small, safe, local fix. It replaces just that single line; it may contain newlines if one line becomes several. Omit "suggestion" whenever the fix is not that simple. Never put code fences in it.`;
+var MAX_SUGGESTION_CHARS = 2e3;
 function buildSystemPrompt(ctx = {}) {
   const parts = [SYSTEM_PROMPT];
   if (ctx.policyText?.trim()) {
@@ -57463,6 +57480,7 @@ ${body}
     );
   }
   if (ctx.learnedText?.trim()) parts.push(ctx.learnedText.trim());
+  if (ctx.suggestions) parts.push(SUGGESTION_RULES);
   if (ctx.criteria?.length) {
     parts.push(
       `Also score this rubric. Add a top-level "rubric" array to the JSON: [{"id": "<criterion id>", "result": "pass" | "fail" | "n/a" | <1-5 for scored criteria>, "justification": "<one sentence>", "evidence": {"path": "<file>", "line": <new-file line>, "quote": "<exact text copied from the diff>"}}]. Evidence with an exact quote is REQUIRED for "fail" and for scores of 1-2; without it the result is ignored. Use "n/a" when the criterion does not apply. Criteria:
@@ -57554,13 +57572,13 @@ var triageOutputSchema = external_exports.object({
     path: external_exports.string(),
     lane: laneEnum,
     reason: external_exports.string().default(""),
-    findings: external_exports.array(external_exports.object({ line: external_exports.coerce.number().int(), quote: external_exports.string().optional(), message: external_exports.string() })).max(50).default([])
+    findings: external_exports.array(external_exports.object({ line: external_exports.coerce.number().int(), quote: external_exports.string().optional(), message: external_exports.string(), suggestion: external_exports.string().optional() })).max(50).default([])
   })),
   rubric: rubricOutputSchema
 });
 function parseTriageOutput(raw) {
   let t = raw.trim();
-  const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const fence = t.startsWith("{") ? null : t.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (fence?.[1]) t = fence[1].trim();
   const a = t.indexOf("{");
   const b = t.lastIndexOf("}");
@@ -57627,8 +57645,30 @@ function repairJson(s) {
   out = out.replace(/,\s*"(?:[^"\\]|\\.)*"\s*$/, "");
   return out + stack.reverse().join("");
 }
+function newSideText(patch) {
+  const out = /* @__PURE__ */ new Map();
+  let n = 0;
+  let inHunk = false;
+  for (const line of (patch ?? "").split("\n")) {
+    const h = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (h) {
+      n = Number(h[1]);
+      inHunk = true;
+      continue;
+    }
+    if (!inHunk || line.startsWith("\\") || line.startsWith("-")) continue;
+    out.set(n++, line.slice(1));
+  }
+  return out;
+}
+function keepSuggestion(raw, current) {
+  if (raw === void 0 || current === void 0) return void 0;
+  const s = raw.replace(/\r\n?/g, "\n").replace(/\n$/, "");
+  if (!s.trim() || s.length >= MAX_SUGGESTION_CHARS || s.includes("```")) return void 0;
+  return s.trimEnd() === current.replace(/\r$/, "").trimEnd() ? void 0 : s;
+}
 var MAX_FINDINGS = 20;
-function validateAgainstFiles(out, files, criteria = []) {
+function validateAgainstFiles(out, files, criteria = [], suggestions) {
   const known = new Set(files.map((f) => f.path));
   const map2 = /* @__PURE__ */ new Map();
   for (const f of out.files) {
@@ -57644,6 +57684,7 @@ function validateAgainstFiles(out, files, criteria = []) {
     const pf = byPath.get(f.path);
     if (!pf) continue;
     const valid = diffLines(pf.patch);
+    const text = suggestions?.(f.path) ? newSideText(pf.patch) : void 0;
     for (const x of f.findings) {
       const message = x.message.trim().slice(0, 300);
       if (!message) continue;
@@ -57652,7 +57693,8 @@ function validateAgainstFiles(out, files, criteria = []) {
       const key = `${f.path}:${line ?? "file"}:${message}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      findings.push({ path: f.path, ...line !== void 0 ? { line, quote } : {}, message });
+      const suggestion = line !== void 0 && text ? keepSuggestion(x.suggestion, text.get(line)) : void 0;
+      findings.push({ path: f.path, ...line !== void 0 ? { line, quote } : {}, message, ...suggestion !== void 0 ? { suggestion } : {} });
     }
   }
   return {
@@ -57726,7 +57768,7 @@ ${retryInstruction(firstTruncated)}` : prompt,
         }
         let llm;
         try {
-          llm = validateAgainstFiles(parseTriageOutput(raw), input2.files, ctx.criteria ?? []);
+          llm = validateAgainstFiles(parseTriageOutput(raw), input2.files, ctx.criteria ?? [], ctx.suggestions);
         } catch (pe) {
           if (!r.truncated) throw pe;
           throw new LlmError("parse", { provider: provider.providerId });
@@ -57931,7 +57973,7 @@ ${deepRules(cfg, opts.tools)}`;
     }
     raw = final;
     try {
-      return result(validateAgainstFiles(parseTriageOutput(raw), input2.files, ctx.criteria ?? []));
+      return result(validateAgainstFiles(parseTriageOutput(raw), input2.files, ctx.criteria ?? [], ctx.suggestions));
     } catch (e) {
       const info2 = classifyLlmFailure(e, provider.providerId);
       log(`LLM JSON attempt 1 failed: ${formatLlmFailure(info2)}`);
@@ -57943,7 +57985,7 @@ ${deepRules(cfg, opts.tools)}`;
       messages.push({ role: "assistant", content: raw });
       messages.push({ role: "user", content: retryInstruction(firstTruncated) });
       raw = (await turn(void 0, true, retryLimit)).text;
-      const llm = validateAgainstFiles(parseTriageOutput(raw), input2.files, ctx.criteria ?? []);
+      const llm = validateAgainstFiles(parseTriageOutput(raw), input2.files, ctx.criteria ?? [], ctx.suggestions);
       warn(outputLimitWarning({ ref: ctx.ref, model: cfg.provider.model, limit, retryLimit, outputTokens: firstOut, truncated: firstTruncated, retry: "succeeded" }));
       return result(llm);
     }
@@ -58495,6 +58537,178 @@ function createProvider(cfg, env = process.env, bindings = {}) {
   }
 }
 
+// src/redact.ts
+var PATTERNS = [
+  /mjr_[ea]_[A-Za-z0-9_-]{6,}/g,
+  // MergeJudge runner / enrollment tokens
+  /sk-ant-[A-Za-z0-9_-]{6,}/g,
+  // Anthropic keys and OAuth tokens
+  /Bearer\s+[A-Za-z0-9._~+/=-]{8,}/gi,
+  /\b(?:authorization|proxy-authorization|x-api-key|api-key|x-auth-token)\s*[:=]\s*[^,\s"]+/gi,
+  /\b(ANTHROPIC_[A-Z_]+|MERGEJUDGE_[A-Z_]*(?:TOKEN|KEY|SECRET)[A-Z_]*|CLAUDE_CODE_OAUTH_TOKEN)=\S+/g,
+  /\bgh[pousr]_[A-Za-z0-9]{20,}/g,
+  /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}/g,
+  // OpenAI-style keys
+  /\b[0-9a-f]{32}\.[A-Za-z0-9]{8,}\b/g,
+  // z.ai API keys (<32 hex>.<secret>)
+  /\b(ZAI_[A-Z_]*|OPENAI_[A-Z_]*|CODEX_[A-Z_]*(?:KEY|TOKEN)[A-Z_]*)=\S+/g,
+  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g,
+  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,
+  // JWT
+  /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,
+  // email
+  /(?<![A-Za-z0-9+/])(?:[A-Za-z0-9+/]{4}){10,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?(?![A-Za-z0-9+/])/g,
+  // long standard base64 (40+ chars; padding is not a word char)
+  /\b(?:[A-Za-z0-9_-]{4}){12,}\b/g,
+  // long url-safe token (48+ chars)
+  /\b[0-9a-fA-F]{32,}\b/g
+  // long hex (specific key shapes above run first)
+];
+var REDACTED = "[redacted]";
+var MAX_LOG_CHARS = 4e3;
+function mustDrop(text) {
+  if (text.length > MAX_LOG_CHARS) return true;
+  if (text.includes("diff --git ") || /@@ -\d+(?:,\d+)? \+\d+/.test(text)) return true;
+  if (/<\/?untrusted_pr_data>/i.test(text)) return true;
+  if (text.includes("You are MergeJudge, a pull request risk triager")) return true;
+  if (/"summary"\s*:/.test(text) && /"lane"\s*:/.test(text) && /"files"\s*:/.test(text)) return true;
+  return false;
+}
+function redact(text, secrets = []) {
+  if (mustDrop(text)) return REDACTED;
+  let out = text;
+  for (const s of secrets) if (s && s.length >= 6) out = out.split(s).join(REDACTED);
+  for (const re of PATTERNS) out = out.replace(re, REDACTED);
+  return out;
+}
+function redactedLogs(sink, secrets = []) {
+  return {
+    info: (m) => sink.info(redact(m, secrets)),
+    warning: (m) => sink.warning(redact(m, secrets))
+  };
+}
+
+// core/shepherd.ts
+var SHEPHERD_LABEL = "shepherd";
+var SHEPHERD_MARKER = "<!-- mergejudge:shepherd";
+var MAX_ENTRIES = 20;
+var FIELD_MAX = 300;
+var DEFAULT_PROTECTED_PATHS = [
+  ...DEFAULT_PROTECTED,
+  ".mergejudge.yml",
+  ".mergejudge.yaml",
+  "**/deploy*",
+  "**/deploy*/**",
+  "**/*deploy*.sh",
+  "**/rollback*",
+  "**/rollback*/**",
+  "scripts/deploy/**",
+  "**/*secret*",
+  "**/*.env",
+  "**/.env*",
+  "**/*auth*.{ts,js,py,go}",
+  "**/*.pem",
+  "**/*.key",
+  "wrangler.toml"
+];
+var norm4 = (p) => p.replace(/^\.\//, "");
+function isProtectedPath(path2, cfg) {
+  const p = norm4(path2);
+  if (isMergeJudgeConfigPath(p)) return true;
+  return [...DEFAULT_PROTECTED_PATHS, ...cfg.shepherd.protected_paths].some((g) => minimatch(p, g, { dot: true, nocase: true }));
+}
+var isShepherdOn = (labels) => (labels ?? []).some((l) => (typeof l === "string" ? l : l.name ?? "").toLowerCase() === SHEPHERD_LABEL);
+var STATUSES = ["watching", "fixing", "green", "stopped", "limit", "protected", "off"];
+var entrySchema = external_exports.object({
+  at: external_exports.string().max(40),
+  kind: external_exports.enum(["ci", "conflict", "suggestion", "info"]),
+  what: external_exports.string(),
+  changed: external_exports.string(),
+  result: external_exports.string(),
+  commit: external_exports.string().regex(/^[0-9a-f]{7,40}$/i).optional(),
+  run: external_exports.string().regex(/^https:\/\/[^\s<>()]+$/).max(300).optional()
+});
+var stateSchema = external_exports.object({
+  v: external_exports.literal(1),
+  on: external_exports.boolean(),
+  attempts: external_exports.number().int().min(0).max(1e3),
+  maxAttempts: external_exports.number().int().min(1).max(10),
+  status: external_exports.enum(STATUSES),
+  entries: external_exports.array(entrySchema)
+});
+var newShepherdState = (maxAttempts = 3) => ({ v: 1, on: true, attempts: 0, maxAttempts, status: "watching", entries: [] });
+var clean = (s, sanitize) => sanitize(String(s)).replace(/\s+/g, " ").trim().slice(0, FIELD_MAX);
+function addEntry(state, e, sanitize = (t) => redact(t)) {
+  const entry = {
+    at: e.at,
+    kind: e.kind,
+    what: clean(e.what, sanitize),
+    changed: clean(e.changed, sanitize),
+    result: clean(e.result, sanitize),
+    ...e.commit && /^[0-9a-f]{7,40}$/i.test(e.commit) ? { commit: e.commit } : {},
+    ...e.run && /^https:\/\/[^\s<>()]+$/.test(e.run) ? { run: e.run.slice(0, 300) } : {}
+  };
+  return { ...state, entries: [...state.entries, entry].slice(-MAX_ENTRIES) };
+}
+function parseShepherdState(body) {
+  const m = body?.match(/<!-- mergejudge:shepherd (\S+) -->/);
+  if (!m) return null;
+  try {
+    const r = stateSchema.safeParse(JSON.parse(decodeURIComponent(m[1])));
+    return r.success ? { ...r.data, entries: r.data.entries.slice(-MAX_ENTRIES) } : null;
+  } catch {
+    return null;
+  }
+}
+var STATUS_TEXT = {
+  watching: "\u{1F440} Watching",
+  fixing: "\u{1F527} Fixing",
+  green: "\u2705 Checks pass",
+  stopped: "\u23F9\uFE0F Stopped",
+  limit: "\u{1F6D1} Stopped: retry limit reached",
+  protected: "\u{1F512} Stopped: a fix needs a protected path",
+  off: "\u{1F4A4} Off"
+};
+var cell = (s) => escapeMd(s).replace(/@(?=[A-Za-z0-9])/g, "@\u200B");
+function renderShepherdComment(state, repoUrl) {
+  const out = [
+    "### \u{1F411} MergeJudge Shepherd \u2014 Watch and auto-fix",
+    "",
+    "MergeJudge watches this PR and keeps fixing it until checks and review pass.",
+    "",
+    `**Status:** ${STATUS_TEXT[state.status]}  `,
+    `**Fix attempts:** ${state.attempts}/${state.maxAttempts}`,
+    ""
+  ];
+  if (state.entries.length) {
+    out.push("| When | Kind | What failed | What changed | Result | Links |", "| --- | --- | --- | --- | --- | --- |");
+    for (const e of state.entries) {
+      const links = [
+        e.commit ? `[commit ${e.commit.slice(0, 7)}](${repoUrl}/commit/${e.commit})` : "",
+        e.run ? `[run](${e.run})` : ""
+      ].filter(Boolean).join(" \xB7 ");
+      out.push(`| ${cell(e.at)} | ${e.kind} | ${cell(e.what)} | ${cell(e.changed)} | ${cell(e.result)} | ${links} |`);
+    }
+    out.push("");
+  } else out.push("_No steps yet._", "");
+  out.push(
+    "Shepherd never merges. A human still merges.",
+    "To turn it off, comment `/mergejudge shepherd off` or remove the `shepherd` label.",
+    "",
+    `${SHEPHERD_MARKER} ${encodeURIComponent(JSON.stringify(state))} -->`
+  );
+  return out.join("\n");
+}
+async function upsertShepherdComment(ok, r, pull, next) {
+  const comments = await ok.paginate(ok.rest.issues.listComments, { ...r, issue_number: pull, per_page: 100 });
+  const existing = comments.find((c) => c.body?.includes(SHEPHERD_MARKER) && c.user?.type === "Bot");
+  const state = typeof next === "function" ? next(parseShepherdState(existing?.body)) : next;
+  const body = renderShepherdComment(state, `https://github.com/${r.owner}/${r.repo}`);
+  if (existing) await ok.rest.issues.updateComment({ ...r, comment_id: existing.id, body });
+  else await ok.rest.issues.createComment({ ...r, issue_number: pull, body });
+  return state;
+}
+
 // src/config.ts
 var ConfigError = class extends Error {
 };
@@ -58710,6 +58924,7 @@ async function produceReviewResult(o) {
     };
   }
   const labels = (pr.labels ?? []).map((l) => l.name);
+  const shepherdOn = isShepherdOn(labels) && cfg.shepherd.enabled && cfg.shepherd.suggestions;
   if (o.skipAi) notes.push(o.skipAi);
   else if (o.providerNote && cfg.provider.type !== "none") notes.push(`LLM disabled (${!provider && o.keyNote || o.providerNote}); rules-only.`);
   if (o.noProviderNote && !o.skipAi && cfg.provider.type === "none" && !provider) notes.push(o.noProviderNote);
@@ -58784,7 +58999,7 @@ async function produceReviewResult(o) {
       context3 = g.pieces;
     }
     const prompt = { title: pr.title ?? "", body: pr.body ?? "", files: kept, context: context3 };
-    const tctx = { policyText: policies.text, criteria, learnedText: cfg.learning.enabled ? o.learnedLines ? renderLearnedSection(o.learnedLines, DELIM) : buildLearnedContext({ learned: o.learned, lessons: o.lessons, outcomeStats: o.outcomeStats }, DELIM) : "", skippedDiffFiles: skipped, ref: o.ref ?? `#${pr.number}` };
+    const tctx = { ...shepherdOn ? { suggestions: (p) => !isProtectedPath(p, cfg) } : {}, policyText: policies.text, criteria, learnedText: cfg.learning.enabled ? o.learnedLines ? renderLearnedSection(o.learnedLines, DELIM) : buildLearnedContext({ learned: o.learned, lessons: o.lessons, outcomeStats: o.outcomeStats }, DELIM) : "", skippedDiffFiles: skipped, ref: o.ref ?? `#${pr.number}` };
     let res = mode === "deep" && tools && canUseTools(provider) ? await runDeepTriage(provider, prompt, cfg, tctx, { tools }, log.info, log.warning) : await runTriage(provider, prompt, cfg, tctx, log.info, log.warning);
     if (res.llm && aiModeOf(cfg) === "deep") {
       const second = await runSecondPass(provider, prompt, cfg, tctx, res.llm, log.info);
@@ -58846,6 +59061,7 @@ async function produceReviewResult(o) {
     body,
     findings,
     syncInline: !!llm && !cached2,
+    ...shepherdOn ? { shepherd: true } : {},
     usage: {
       lane: agg.lane,
       mode: llm && provider ? usedMode : "rules-only",
@@ -58884,6 +59100,20 @@ ${checkFallbackNote(r.lane, status)}`);
     try {
       const plan = await syncInlineFindings(ok, repo, r.prNumber, r.headSha, r.findings, log.warning, log.info, `${r.usage.mode}:${r.usage.model ?? "rules-only"}`);
       log.info(`Inline findings: ${plan.create.length} new, ${plan.update.length} updated/resolved.`);
+      if (r.shepherd) {
+        const n = [...plan.create, ...plan.update].filter((x) => x.body.includes("```suggestion\n")).length;
+        if (n) {
+          try {
+            const at = (/* @__PURE__ */ new Date()).toISOString();
+            await upsertShepherdComment(ok, repo, r.prNumber, (prev) => addEntry(
+              prev ?? newShepherdState(cfg.shepherd.max_attempts),
+              { at, kind: "suggestion", what: "Review findings with a clear one-line fix", changed: `${n} suggested change${n === 1 ? "" : "s"} posted on review comments`, result: "Waiting for a human to commit them" }
+            ));
+          } catch (e) {
+            log.warning(`Could not update the Shepherd comment: ${e.message}`);
+          }
+        }
+      }
     } catch (e) {
       log.warning(`Could not post inline findings: ${e.message}`);
     }
@@ -58955,57 +59185,6 @@ async function runReview(o) {
     onResult: o.onResult,
     onSnapshot: o.onSnapshot
   });
-}
-
-// src/redact.ts
-var PATTERNS = [
-  /mjr_[ea]_[A-Za-z0-9_-]{6,}/g,
-  // MergeJudge runner / enrollment tokens
-  /sk-ant-[A-Za-z0-9_-]{6,}/g,
-  // Anthropic keys and OAuth tokens
-  /Bearer\s+[A-Za-z0-9._~+/=-]{8,}/gi,
-  /\b(?:authorization|proxy-authorization|x-api-key|api-key|x-auth-token)\s*[:=]\s*[^,\s"]+/gi,
-  /\b(ANTHROPIC_[A-Z_]+|MERGEJUDGE_[A-Z_]*(?:TOKEN|KEY|SECRET)[A-Z_]*|CLAUDE_CODE_OAUTH_TOKEN)=\S+/g,
-  /\bgh[pousr]_[A-Za-z0-9]{20,}/g,
-  /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}/g,
-  // OpenAI-style keys
-  /\b[0-9a-f]{32}\.[A-Za-z0-9]{8,}\b/g,
-  // z.ai API keys (<32 hex>.<secret>)
-  /\b(ZAI_[A-Z_]*|OPENAI_[A-Z_]*|CODEX_[A-Z_]*(?:KEY|TOKEN)[A-Z_]*)=\S+/g,
-  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g,
-  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,
-  // JWT
-  /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,
-  // email
-  /(?<![A-Za-z0-9+/])(?:[A-Za-z0-9+/]{4}){10,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?(?![A-Za-z0-9+/])/g,
-  // long standard base64 (40+ chars; padding is not a word char)
-  /\b(?:[A-Za-z0-9_-]{4}){12,}\b/g,
-  // long url-safe token (48+ chars)
-  /\b[0-9a-fA-F]{32,}\b/g
-  // long hex (specific key shapes above run first)
-];
-var REDACTED = "[redacted]";
-var MAX_LOG_CHARS = 4e3;
-function mustDrop(text) {
-  if (text.length > MAX_LOG_CHARS) return true;
-  if (text.includes("diff --git ") || /@@ -\d+(?:,\d+)? \+\d+/.test(text)) return true;
-  if (/<\/?untrusted_pr_data>/i.test(text)) return true;
-  if (text.includes("You are MergeJudge, a pull request risk triager")) return true;
-  if (/"summary"\s*:/.test(text) && /"lane"\s*:/.test(text) && /"files"\s*:/.test(text)) return true;
-  return false;
-}
-function redact(text, secrets = []) {
-  if (mustDrop(text)) return REDACTED;
-  let out = text;
-  for (const s of secrets) if (s && s.length >= 6) out = out.split(s).join(REDACTED);
-  for (const re of PATTERNS) out = out.replace(re, REDACTED);
-  return out;
-}
-function redactedLogs(sink, secrets = []) {
-  return {
-    info: (m) => sink.info(redact(m, secrets)),
-    warning: (m) => sink.warning(redact(m, secrets))
-  };
 }
 
 // src/security.ts

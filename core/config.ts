@@ -110,6 +110,23 @@ const DEFAULT_PR_TEMPLATE: { enabled: boolean; sections: string[]; min_chars: nu
   enabled: false, sections: DEFAULT_PR_TEMPLATE_SECTIONS, min_chars: 15, apply_to: "agents", missing_lane: "review",
 };
 
+export const DEFAULT_SHEPHERD = { enabled: true, max_attempts: 3, protected_paths: [] as string[], suggestions: true };
+/**
+ * Shepherd (watch and auto-fix). Like all policy this is read from the BASE branch, never the PR head, so a PR cannot
+ * loosen its own guardrails. `enabled` only means the repo allows Shepherd to be turned on per PR (comment or label).
+ */
+const shepherdSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    /** Fix attempts per PR before Shepherd posts a summary and stops. */
+    max_attempts: z.number().int().min(1).max(10).default(3),
+    /** Extra globs Shepherd never edits, added to the built-in protected paths (core/shepherd.ts). */
+    protected_paths: z.array(z.string()).default([]),
+    /** Tier 1: inline review comments carry "suggested changes" while Shepherd is on for the PR. */
+    suggestions: z.boolean().default(true),
+  })
+  .default(DEFAULT_SHEPHERD);
+
 export const configSchema = z.object({
   provider: providerSchema,
   lanes: z
@@ -212,6 +229,7 @@ export const configSchema = z.object({
       missing_lane: z.enum(["review", "block"]).default("review"),
     })
     .default(DEFAULT_PR_TEMPLATE),
+  shepherd: shepherdSchema,
   /** Repo guidance files from the base tip. Empty list disables policy injection. */
   policy_files: z.array(z.string()).max(10).default(DEFAULT_POLICY_FILES),
   /** Globs of policy paths to skip even if listed in policy_files. */

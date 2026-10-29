@@ -564,13 +564,16 @@ export async function conflictCheck(c: ShepherdCtx, prIn: PullLite): Promise<voi
   if (hist.attempts >= cap) return handOff(c, n, { rule: RULE.L1, reason: `all ${cap} fix attempts are used (${hist.attempts}/${cap}), so the merge conflict is left to a human` });
   if (!(await checkoutHead(c.cwd, pr.head.ref, pr.head.sha))) { c.log.info(`Branch ${pr.head.ref} moved; skipping conflict work.`); return; }
   const attempt = hist.attempts + 1;
-  const finish = async (touched: string[], lines: number) => {
-    // The whole merge, not just the conflicted files: whatever the base brings in must also be free of protected paths.
+  /** H1 over the whole merge (not just the conflicted files): whatever the base brings in must be free of protected paths. Runs before any size check. */
+  const incomingGuard = async (): Promise<boolean> => {
     const incoming = protectedHits(await incomingPaths(c.cwd, pr.head.sha), { shepherd: sc });
-    if (incoming.length) {
-      await resetClean(c.cwd);
-      return handOff(c, n, { rule: RULE.H1, reason: `merging ${pr.base.ref} would bring changes to protected files into this PR; the merge was aborted and nothing was pushed`, paths: incoming });
-    }
+    if (!incoming.length) return false;
+    await resetClean(c.cwd);
+    await handOff(c, n, { rule: RULE.H1, reason: `merging ${pr.base.ref} would bring changes to protected files into this PR; the merge was aborted and nothing was pushed`, paths: incoming });
+    return true;
+  };
+  const finish = async (touched: string[], lines: number) => {
+    if (await incomingGuard()) return;
     const message = buildCommitMessage({ subject: `shepherd: resolve merge conflicts with ${pr.base.ref} (attempt ${attempt}/${cap})`, attempt, kind: "conflict" });
     const sha = await commitStaged(c.cwd, message, c.identity ?? DEFAULT_IDENTITY);
     const pushed = await pushHead(c.cwd, pr.head.ref, { token: c.token, serverUrl: c.serverUrl, onSecret: c.onSecret });
@@ -614,8 +617,10 @@ export async function conflictCheck(c: ShepherdCtx, prIn: PullLite): Promise<voi
     }
     for (const path of conflicted) if (/^(<{7}|>{7}) /m.test(readFileSync(join(c.cwd, path), "utf8"))) { await resetClean(c.cwd); return handOff(c, n, { rule: RULE.H4, reason: "conflict markers remained after the mechanical resolution", paths: [path] }); }
 
-    // Size: lines changed in the conflicted files relative to the PR's own ("ours") version.
+    // H1 over the whole merge comes before the size check: an oversized merge that also touches protected files reports H1.
     const staged = await stageAll(c.cwd, conflicted);
+    if (await incomingGuard()) return;
+    // Size: lines changed in the conflicted files relative to the PR's own ("ours") version.
     if (staged.lines > sc.max_fix_lines || staged.files.length > sc.max_fix_files) {
       await resetClean(c.cwd);
       return handOff(c, n, { rule: RULE.H2, reason: `the resolution changes ${staged.lines} lines in ${staged.files.length} files (limits: ${sc.max_fix_lines} lines, ${sc.max_fix_files} files); nothing was pushed`, paths: conflicted });

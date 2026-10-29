@@ -870,6 +870,19 @@ describe("merge conflicts", () => {
       expect(handoffs(gh.st)[0]!.body).toContain(wf);
     });
 
+    it("H1 is reported before H2: a merge that is both oversized and touches protected files names H1", async () => {
+      const many = (p: string) => Array.from({ length: 60 }, (_, i) => `import ${p}${i} from "${p}${i}";`).join("\n") + "\n";
+      const { repo, gh, run } = conflictRepo({ "src/m.ts": 'import z from "z";\n' }, { "src/m.ts": 'import z from "z";\n' + many("p") }, { "src/m.ts": 'import z from "z";\n' + many("q"), [wf]: "name: x\n" });
+      const before = repo.tip("feature");
+      await run(sync);
+      expect(repo.tip("feature")).toBe(before);
+      expect(dirty(repo)).toBe("");
+      const b = handoffs(gh.st)[0]!.body;
+      expect(b).toContain("Hand-off H1");
+      expect(b).not.toContain("Hand-off H2");
+      expect(b).toContain(wf);
+    });
+
     it("a merge that touches only unprotected files still pushes", async () => {
       const { repo, gh, run } = conflictRepo({ "f.txt": body }, { "f.txt": body.replace("line2\n", "line2 PR\n") }, { "f.txt": body.replace("line27\n", "line27 BASE\n"), "docs/readme.md": "hi\n" });
       const before = repo.tip("feature");

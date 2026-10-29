@@ -60331,12 +60331,15 @@ async function conflictCheck(c, prIn) {
     return;
   }
   const attempt = hist.attempts + 1;
-  const finish = async (touched, lines) => {
+  const incomingGuard = async () => {
     const incoming = protectedHits(await incomingPaths(c.cwd, pr.head.sha), { shepherd: sc });
-    if (incoming.length) {
-      await resetClean(c.cwd);
-      return handOff(c, n, { rule: RULE.H1, reason: `merging ${pr.base.ref} would bring changes to protected files into this PR; the merge was aborted and nothing was pushed`, paths: incoming });
-    }
+    if (!incoming.length) return false;
+    await resetClean(c.cwd);
+    await handOff(c, n, { rule: RULE.H1, reason: `merging ${pr.base.ref} would bring changes to protected files into this PR; the merge was aborted and nothing was pushed`, paths: incoming });
+    return true;
+  };
+  const finish = async (touched, lines) => {
+    if (await incomingGuard()) return;
     const message = buildCommitMessage({ subject: `shepherd: resolve merge conflicts with ${pr.base.ref} (attempt ${attempt}/${cap})`, attempt, kind: "conflict" });
     const sha = await commitStaged(c.cwd, message, c.identity ?? DEFAULT_IDENTITY);
     const pushed = await pushHead(c.cwd, pr.head.ref, { token: c.token, serverUrl: c.serverUrl, onSecret: c.onSecret });
@@ -60406,6 +60409,7 @@ async function conflictCheck(c, prIn) {
       return handOff(c, n, { rule: RULE.H4, reason: "conflict markers remained after the mechanical resolution", paths: [path2] });
     }
     const staged = await stageAll(c.cwd, conflicted);
+    if (await incomingGuard()) return;
     if (staged.lines > sc.max_fix_lines || staged.files.length > sc.max_fix_files) {
       await resetClean(c.cwd);
       return handOff(c, n, { rule: RULE.H2, reason: `the resolution changes ${staged.lines} lines in ${staged.files.length} files (limits: ${sc.max_fix_lines} lines, ${sc.max_fix_files} files); nothing was pushed`, paths: conflicted });

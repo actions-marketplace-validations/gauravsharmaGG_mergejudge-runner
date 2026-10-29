@@ -710,6 +710,39 @@ describe("merge conflicts", () => {
     expect(dirty(repo)).toBe("");
     expect(handoffs(gh.st)[0]!.body).toContain("Hand-off H2");
   });
+  it("L1: conflict and CI fixes share one cap; a conflict commit is attempt N with its trailer, then both hand off with nothing pushed", async () => {
+    const { repo, gh, run } = conflictRepo({ "src/m.ts": imports("z") }, { "src/m.ts": imports("z", "p") }, { "src/m.ts": imports("z", "q") },
+      { prFiles: ["src/m.ts"], jobs: [{ id: 1, name: "test", conclusion: "failure", log: LOG_A }] }, { provider: textProvider(files("src/m.ts", imports("z", "p", "q") + "// fixed\n")) });
+    await run(sync);
+    expect(tipMsg(repo)).toContain("MergeJudge-Shepherd: attempt 1");
+    expect(tipMsg(repo)).toContain("MergeJudge-Shepherd-Kind: conflict");
+    expect(tipMsg(repo)).toContain("(attempt 1/3)");
+    await run(wr(gh), "workflow_run");
+    expect(tipMsg(repo)).toContain("MergeJudge-Shepherd: attempt 2");
+    expect(tipMsg(repo)).not.toContain("Kind: conflict");
+    repo.commit("main", { "g1.txt": "1\n" }, "base change 2");
+    await run(sync);
+    expect(tipMsg(repo)).toContain("MergeJudge-Shepherd: attempt 3");
+    expect(tipMsg(repo)).toContain("MergeJudge-Shepherd-Kind: conflict");
+    expect(lastState(gh.st).attempts).toBe(3);
+    // Cap reached: the next conflict hands off on L1 with nothing pushed ...
+    repo.commit("main", { "g2.txt": "2\n" }, "base change 3");
+    const tip = repo.tip("feature");
+    await run(sync);
+    expect(repo.tip("feature")).toBe(tip);
+    expect(dirty(repo)).toBe("");
+    expect(handoffs(gh.st)).toHaveLength(1);
+    expect(handoffs(gh.st)[0]!.body).toContain("Loop breaker L1");
+    expect(handoffs(gh.st)[0]!.body).toContain("3/3");
+    expect(gh.st.labels.has("needs-human")).toBe(true);
+    // ... and so does the next CI failure.
+    gh.st.labels.delete("needs-human");
+    gh.st.jobs = [{ id: 1, name: "test", conclusion: "failure", log: failLog("TypeError: a brand new problem") }];
+    await run(wr(gh, { id: 101 }), "workflow_run");
+    expect(repo.tip("feature")).toBe(tip);
+    expect(handoffs(gh.st)).toHaveLength(2);
+    expect(handoffs(gh.st)[1]!.body).toContain("Loop breaker L1");
+  });
   it("L1: the cap applies to conflict resolutions too", async () => {
     const msg = (n: number) => buildCommitMessage({ subject: "s", attempt: n, kind: "conflict" });
     const { repo, gh, run } = conflictRepo({ "src/m.ts": "export const f = () => 1;\n" }, { "src/m.ts": "export const f = () => 2;\n" }, { "src/m.ts": "export const f = () => 3;\n" },

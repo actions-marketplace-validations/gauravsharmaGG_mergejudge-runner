@@ -86,6 +86,11 @@ export async function startMerge(cwd: string, baseRef: string, id: Identity = DE
   return { state: "conflict", conflicted };
 }
 
+/** Every path the merge in progress brings into the PR branch: staged index against the PR head. Renames are split, so both sides show. */
+export async function incomingPaths(cwd: string, headSha: string): Promise<string[]> {
+  return (await g(cwd, ["diff", "--cached", "--name-only", "--no-renames", "-z", headSha])).split("\0").filter(Boolean);
+}
+
 export const mergeBase = (cwd: string, baseRef: string) => g(cwd, ["merge-base", "HEAD", `refs/remotes/origin/${baseRef}`]);
 
 /** Paths the PR changed relative to the merge base. */

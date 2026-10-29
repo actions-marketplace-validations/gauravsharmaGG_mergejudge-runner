@@ -26,7 +26,7 @@ import { HANDOFF_MARKER, NEEDS_HUMAN_LABEL, renderHandoff } from "../core/shephe
 import { RULE, RULE_QUESTION, RULE_STATUS, RULE_TITLE, effectiveCap, type RuleId } from "../core/shepherdrules.js";
 import { redact, type LogFns } from "./redact.js";
 import {
-  DEFAULT_IDENTITY, changedByPr, checkoutHead, commitStaged, mergeBase, pushHead, resetClean, stageAll, stageContent, startMerge, takeTheirs, type Identity,
+  DEFAULT_IDENTITY, changedByPr, checkoutHead, commitStaged, incomingPaths, mergeBase, pushHead, resetClean, stageAll, stageContent, startMerge, takeTheirs, type Identity,
 } from "./shepherdgit.js";
 
 export interface RunResult { code: number; output: string }
@@ -518,6 +518,12 @@ export async function conflictCheck(c: ShepherdCtx, prIn: PullLite): Promise<voi
   if (!(await checkoutHead(c.cwd, pr.head.ref, pr.head.sha))) { c.log.info(`Branch ${pr.head.ref} moved; skipping conflict work.`); return; }
   const attempt = hist.attempts + 1;
   const finish = async (touched: string[], lines: number) => {
+    // The whole merge, not just the conflicted files: whatever the base brings in must also be free of protected paths.
+    const incoming = protectedHits(await incomingPaths(c.cwd, pr.head.sha), { shepherd: sc });
+    if (incoming.length) {
+      await resetClean(c.cwd);
+      return handOff(c, n, { rule: RULE.H1, reason: `merging ${pr.base.ref} would bring changes to protected files into this PR; the merge was aborted and nothing was pushed`, paths: incoming });
+    }
     const message = buildCommitMessage({ subject: `shepherd: resolve merge conflicts with ${pr.base.ref} (attempt ${attempt}/${cap})`, attempt, kind: "conflict" });
     const sha = await commitStaged(c.cwd, message, c.identity ?? DEFAULT_IDENTITY);
     const pushed = await pushHead(c.cwd, pr.head.ref, { token: c.token, serverUrl: c.serverUrl, onSecret: c.onSecret });

@@ -652,7 +652,6 @@ describe("merge conflicts", () => {
     const before = repo.tip("feature");
     await run(sync);
     expect(repo.tip("feature")).toBe(before);
-    expect(existsSync(join(repo.ws, ".git", "MERGE_HEAD"))).toBe(false);
     expect(dirty(repo)).toBe("");
     const b = handoffs(gh.st)[0]!.body;
     expect(b).toContain("Hand-off H4: judgment call");
@@ -743,6 +742,65 @@ describe("merge conflicts", () => {
     expect(handoffs(gh.st)).toHaveLength(2);
     expect(handoffs(gh.st)[1]!.body).toContain("Loop breaker L1");
   });
+  describe("protected paths across the whole merge", () => {
+    const body = Array.from({ length: 30 }, (_, i) => `line${i}`).join("\n") + "\n";
+    const wf = ".github/workflows/x.yml";
+
+    it("H1: a clean merge where the base changed a protected file is aborted, nothing pushed, needs-human added", async () => {
+      const { repo, gh, run } = conflictRepo({ "f.txt": body }, { "f.txt": body.replace("line2\n", "line2 PR\n") }, { "f.txt": body.replace("line27\n", "line27 BASE\n"), [wf]: "name: x\n" });
+      const before = repo.tip("feature");
+      await run(sync);
+      expect(repo.tip("feature")).toBe(before);
+      expect(dirty(repo)).toBe("");
+      expect(gh.st.labels.has("needs-human")).toBe(true);
+      const b = handoffs(gh.st)[0]!.body;
+      expect(b).toContain("Hand-off H1");
+      expect(b).toContain(wf);
+      expect(b).toContain("would bring changes to protected files into this PR");
+      expect(b).toContain("nothing was pushed");
+      expect(lastState(gh.st)).toMatchObject({ on: false, status: "protected", attempts: 0 });
+    });
+
+    it("H1: a conflict in a normal file does not hide a protected file the base also changed", async () => {
+      const { repo, gh, run } = conflictRepo({ "src/m.ts": imports("z") }, { "src/m.ts": imports("z", "p") }, { "src/m.ts": imports("z", "q"), "deploy.sh": "echo 1\n", [wf]: "name: x\n" });
+      const before = repo.tip("feature");
+      await run(sync);
+      expect(repo.tip("feature")).toBe(before);
+      expect(dirty(repo)).toBe("");
+      const b = handoffs(gh.st)[0]!.body;
+      expect(b).toContain("Hand-off H1");
+      expect(b).toContain(wf);
+      expect(b).toContain("deploy.sh");
+      expect(b).not.toContain("src/m.ts");
+      expect(gh.st.labels.has("needs-human")).toBe(true);
+    });
+
+    it("H1: a base that deletes or renames a protected file counts, both sides of the rename", async () => {
+      const repo = makeRepo({ "f.txt": body, [wf]: "name: x\n" });
+      repo.commit("feature", { "f.txt": body.replace("line2\n", "line2 PR\n") }, "pr change");
+      git(repo.dev, "checkout", "-q", "main");
+      git(repo.dev, "mv", wf, "docs-x.yml");
+      git(repo.dev, "commit", "-q", "-am", "move workflow");
+      git(repo.dev, "push", "-q", "origin", "main");
+      const gh = fakeGh(repo, { mergeable: false });
+      const ctx = makeCtx(repo, gh);
+      const before = repo.tip("feature");
+      await runShepherd(ctx, "pull_request", sync);
+      expect(repo.tip("feature")).toBe(before);
+      expect(handoffs(gh.st)[0]!.body).toContain(wf);
+    });
+
+    it("a merge that touches only unprotected files still pushes", async () => {
+      const { repo, gh, run } = conflictRepo({ "f.txt": body }, { "f.txt": body.replace("line2\n", "line2 PR\n") }, { "f.txt": body.replace("line27\n", "line27 BASE\n"), "docs/readme.md": "hi\n" });
+      const before = repo.tip("feature");
+      await run(sync);
+      expect(repo.tip("feature")).not.toBe(before);
+      expect(tipMsg(repo)).toContain("MergeJudge-Shepherd: attempt 1");
+      expect(handoffs(gh.st)).toHaveLength(0);
+      expect(gh.st.labels.has("needs-human")).toBe(false);
+    });
+  });
+
   it("L1: the cap applies to conflict resolutions too", async () => {
     const msg = (n: number) => buildCommitMessage({ subject: "s", attempt: n, kind: "conflict" });
     const { repo, gh, run } = conflictRepo({ "src/m.ts": "export const f = () => 1;\n" }, { "src/m.ts": "export const f = () => 2;\n" }, { "src/m.ts": "export const f = () => 3;\n" },

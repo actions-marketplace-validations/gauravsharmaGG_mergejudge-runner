@@ -14,8 +14,8 @@ import type { Octokit, Repo } from "../core/github.js";
 import { completeWithMeta, type LlmProvider } from "../core/llm/provider.js";
 import { CHECK_NAME } from "../core/render.js";
 import {
-  SHEPHERD_LABEL, SHEPHERD_MARKER, addEntry, addGrant, addWaiting, dropWaiting, findWaiting, hasWaiting, isOwnStateComment, isProtectedPath, isShepherdOn, newShepherdState, parseShepherdCommand, parseShepherdState,
-  protectedHits, upsertShepherdComment, type EntryKind, type ShepherdState, type WaitingRun,
+  SHEPHERD_LABEL, SHEPHERD_MARKER, addEntry, addGrant, addWaiting, dropWaiting, findWaiting, hasWaiting, isProtectedPath, isShepherdOn, newShepherdState, parseShepherdCommand,
+  protectedHits, readShepherdState, upsertShepherdComment, type EntryKind, type ShepherdState, type WaitingRun,
 } from "../core/shepherd.js";
 import { classifyConflictFile, isLockfile, manifestOf, unionLines } from "../core/shepherdconflict.js";
 import {
@@ -114,8 +114,7 @@ async function removeLabel(c: ShepherdCtx, n: number, label: string): Promise<vo
 
 async function readState(c: ShepherdCtx, n: number): Promise<ShepherdState | null> {
   const comments = await c.ok.paginate(c.ok.rest.issues.listComments, { ...c.repo, issue_number: n, per_page: 100 });
-  const mine = comments.find((x) => isOwnStateComment(x, c.botLogin));
-  return parseShepherdState(mine?.body);
+  return readShepherdState(comments, c.botLogin);
 }
 
 /** The fix-attempt cap of this PR: the configured budget plus retry grants from the (trusted) state comment. */

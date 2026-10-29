@@ -413,6 +413,8 @@ Setup: copy [`examples/shepherd-workflow.yml`](./examples/shepherd-workflow.yml)
 
 **Token note.** Pushes made with the default `GITHUB_TOKEN` do not start new workflow runs (a GitHub rule), so CI will not re-run after a fix. Pass a GitHub App token (`app_id` and `app_private_key`) or a token secret as `github_token` so CI re-runs. Shepherd caps its attempts either way. Shepherd also ignores its own bot comments, labels and workflow runs, so a push by Shepherd never turns it on again.
 
+**Concurrency.** The example workflow puts every event of one PR in one concurrency group (the PR number, taken from whichever event field carries it), so a label run and a CI `workflow_run` for the same PR do not overlap. GitHub keeps one running and one pending run per group, and a newer pending run replaces an older pending one. Shepherd is written for that: each run re-reads the PR (labels, commits, checks and its state comment) and decides from that. A pending comment command that gets replaced is lost, so send it again. The state comment is also safe against overlap: the oldest Shepherd state comment on a PR is the live one, grants from any duplicate still count, and after creating a comment Shepherd checks that it did not lose a race and merges into the older one.
+
 Guardrails: `.github/`, deploy and rollback scripts, auth and secrets files, and `.mergejudge.yml` are never edited automatically. No force-pushes.
 
 ```yaml

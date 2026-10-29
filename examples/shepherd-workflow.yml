@@ -25,8 +25,22 @@ permissions:
   checks: read
   actions: write
 
+# One group per PR, whatever the event, so a label run and a workflow_run for the same PR never overlap (they used to key on
+# the PR number and on the branch name, so they ran in parallel and could both create the state comment). What each event keys on:
+#   pull_request, pull_request_target  the PR number
+#   issue_comment                      the PR number (the issue number of the PR)
+#   workflow_run                       the first PR the run belongs to (workflow_run.pull_requests[0].number)
+#   check_suite                        the first PR of the suite (check_suite.pull_requests[0].number)
+#   status                             no PR number is sent: the commit sha. A status run can overlap a PR run for the same
+#                                      head; that is safe, see below
+#   any event without a PR             the head branch of a workflow_run that lists no PR, else the commit sha or ref
+# GitHub keeps ONE running and ONE pending run per group: a newer pending run replaces (cancels) an older pending one.
+# Shepherd stays correct when that happens, because every run re-reads the PR (labels, commits, checks, the state comment)
+# and decides from that, not from the event that started it. The one thing a replaced run can lose is a comment command
+# (for example `/mergejudge shepherd retry`) that was still pending: send it again. The state comment also copes with
+# overlapping runs: the oldest one is the live one and duplicates are merged into it.
 concurrency:
-  group: shepherd-${{ github.event.pull_request.number || github.event.issue.number || github.event.workflow_run.head_branch || github.event.sha }}
+  group: shepherd-${{ github.event.pull_request.number || github.event.issue.number || github.event.workflow_run.pull_requests[0].number || github.event.check_suite.pull_requests[0].number || github.event.workflow_run.head_branch || github.event.sha || github.ref }}
   cancel-in-progress: false
 
 jobs:

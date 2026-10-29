@@ -87,6 +87,8 @@ export interface GhState {
   calls: string[];
   reruns: number[];
   headCommit?: { message: string; files: string[] };
+  /** Called right after a comment is created (a test can slip a rival's comment in here to simulate a race). */
+  onCreate?: (id: number) => void;
 }
 
 export function fakeGh(repo: Repo3, over: Partial<GhState> = {}) {
@@ -117,7 +119,14 @@ export function fakeGh(repo: Repo3, over: Partial<GhState> = {}) {
         return { data: [] };
       },
       listComments: async () => ({ data: st.comments }),
-      createComment: async (p: { body: string }) => { log("createComment"); st.comments.push({ id: nextId++, body: p.body, user: { type: "Bot", login: "mj[bot]" } }); return { data: {} }; },
+      createComment: async (p: { body: string }) => {
+        log("createComment");
+        const id = nextId++;
+        st.comments.push({ id, body: p.body, user: { type: "Bot", login: "mj[bot]" } });
+        st.onCreate?.(id);
+        return { data: { id } };
+      },
+      deleteComment: async (p: { comment_id: number }) => { log("deleteComment"); st.comments = st.comments.filter((c) => c.id !== p.comment_id); return { data: {} }; },
       updateComment: async (p: { comment_id: number; body: string }) => { log("updateComment"); st.comments.find((c) => c.id === p.comment_id)!.body = p.body; return { data: {} }; },
     },
     repos: {

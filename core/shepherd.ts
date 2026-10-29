@@ -93,7 +93,11 @@ export interface ShepherdEntry {
   run?: string;
   /** Failure fingerprints this step set out to fix (mirror of the commit trailers; the commits are authoritative). */
   fingerprints?: string[];
+  /** "Waiting for checks": L4 could not decide because a counted check on `sha` was still pending. Re-evaluated on the next trigger for the same head. */
+  waiting?: WaitingRun;
 }
+/** The failed workflow run Shepherd could not decide on yet, and the head it ran for. */
+export interface WaitingRun { sha: string; runId: number; conclusion: string; attempt: number }
 /** One `/mergejudge shepherd retry`: who granted the extra attempt and when. `comment` is the command comment's id (a re-run of the same event grants nothing twice). */
 export interface ShepherdGrant { who: string; at: string; comment?: number }
 export interface ShepherdState {
@@ -117,6 +121,7 @@ const entrySchema = z.object({
   commit: z.string().regex(/^[0-9a-f]{7,40}$/i).optional(),
   run: z.string().regex(/^https:\/\/[^\s<>()]+$/).max(300).optional(),
   fingerprints: z.array(z.string().regex(/^[0-9a-f]{6,16}$/)).max(10).optional(),
+  waiting: z.object({ sha: z.string().regex(/^[0-9a-f]{7,40}$/i), runId: z.number().int(), conclusion: z.string().max(30), attempt: z.number().int().min(1).max(1000) }).optional(),
 });
 const grantSchema = z.object({ who: z.string().max(100), at: z.string().max(40), comment: z.number().int().optional() });
 const stateSchema = z.object({
@@ -149,9 +154,31 @@ export function addEntry(state: ShepherdState, e: ShepherdEntry, sanitize: (t: s
     ...(e.commit && /^[0-9a-f]{7,40}$/i.test(e.commit) ? { commit: e.commit } : {}),
     ...(e.run && /^https:\/\/[^\s<>()]+$/.test(e.run) ? { run: e.run.slice(0, 300) } : {}),
     ...(e.fingerprints?.length ? { fingerprints: e.fingerprints.filter((f) => /^[0-9a-f]{6,16}$/.test(f)).slice(0, 10) } : {}),
+    ...(e.waiting && /^[0-9a-f]{7,40}$/i.test(e.waiting.sha) ? { waiting: { ...e.waiting, conclusion: e.waiting.conclusion.slice(0, 30) } } : {}),
   };
   return { ...state, entries: [...state.entries, entry].slice(-MAX_ENTRIES) };
 }
+
+/** The waiting entry for this head, if any. */
+export const findWaiting = (state: ShepherdState | null | undefined, sha: string): WaitingRun | null =>
+  state?.entries.find((e) => e.waiting && e.waiting.sha.toLowerCase() === sha.toLowerCase())?.waiting ?? null;
+
+/** Entries marked "waiting for checks" (at most one is kept, see `addWaiting`). */
+export const hasWaiting = (state: ShepherdState | null | undefined): boolean => !!state?.entries.some((e) => e.waiting);
+
+/**
+ * Record a "waiting for checks" entry. Idempotent: the same head and run is never added twice, and a newer failed run
+ * replaces an older waiting entry (one waiting entry at most, so a trigger re-evaluates exactly one run).
+ */
+export function addWaiting(state: ShepherdState, e: Omit<ShepherdEntry, "waiting">, w: WaitingRun): ShepherdState {
+  if (state.entries.some((x) => x.waiting && x.waiting.sha.toLowerCase() === w.sha.toLowerCase() && x.waiting.runId === w.runId)) return state;
+  return addEntry(dropWaiting(state), { ...e, waiting: w });
+}
+
+/** Drop waiting entries: all of them, or only those not for `keepSha` (the head moved). */
+export const dropWaiting = (state: ShepherdState, keepSha?: string): ShepherdState => ({
+  ...state, entries: state.entries.filter((e) => !e.waiting || (keepSha != null && e.waiting.sha.toLowerCase() === keepSha.toLowerCase())),
+});
 
 export function parseShepherdState(body: string | null | undefined): ShepherdState | null {
   const m = body?.match(/<!-- mergejudge:shepherd (\S+) -->/);

@@ -276,7 +276,7 @@ export function buildCommitMessage(o: { subject: string; attempt: number; kind: 
 // ---------------- decision ----------------
 
 export type Decision =
-  | { action: "skip"; reason: string }
+  | { action: "skip"; reason: string; /** Skipped only because a counted check on the head is still pending: re-evaluate on a later trigger. */ pending?: true }
   | { action: "green" }
   | { action: "rerun"; reason: string }
   | { action: "handoff"; rule: RuleId; reason: string; question: string }
@@ -340,12 +340,12 @@ export function decide(i: DecideInput): Decision {
   if (i.runAttempt === 1 && !i.rerunRequested && current.some((h) => !known.has(h)) && i.history.attempts < cap)
     return { action: "rerun", reason: "re-running failed jobs to rule out a flaky test" };
   if (postFix && latest?.failures != null) {
-    if (i.checks && i.checks.pending > 0) return { action: "skip", reason: `${i.checks.pending} check(s) on the head are still running; L4 waits for the full picture and a later run or check suite will re-evaluate` };
+    if (i.checks && i.checks.pending > 0) return { action: "skip", reason: `${i.checks.pending} check(s) on the head are still running; L4 waits for the full picture and a later run or check suite will re-evaluate`, pending: true };
     const now = i.checks ? i.checks.failing : failureCount(i.failures);
     if (now >= latest.failures) return hand(RULE.L4, `the fix did not reduce the failures across all checks (${latest.failures} before, ${now} now)`);
   }
   if (i.history.attempts >= cap) return hand(RULE.L1, `all ${cap} fix attempts are used (${i.history.attempts}/${cap})`);
-  if (i.checks && i.checks.pending > 0) return { action: "skip", reason: `${i.checks.pending} check(s) on the head are still running; no fix on a partial picture, a later run or check suite will re-evaluate` };
+  if (i.checks && i.checks.pending > 0) return { action: "skip", reason: `${i.checks.pending} check(s) on the head are still running; no fix on a partial picture, a later run or check suite will re-evaluate`, pending: true };
   return { action: "fix", attempt: i.history.attempts + 1 };
 }
 

@@ -14,8 +14,8 @@ import type { Octokit, Repo } from "../core/github.js";
 import { completeWithMeta, type LlmProvider } from "../core/llm/provider.js";
 import { CHECK_NAME } from "../core/render.js";
 import {
-  SHEPHERD_LABEL, SHEPHERD_MARKER, addEntry, addGrant, isOwnStateComment, isProtectedPath, isShepherdOn, newShepherdState, parseShepherdCommand, parseShepherdState,
-  protectedHits, upsertShepherdComment, type EntryKind, type ShepherdState,
+  SHEPHERD_LABEL, SHEPHERD_MARKER, addEntry, addGrant, addWaiting, dropWaiting, findWaiting, hasWaiting, isOwnStateComment, isProtectedPath, isShepherdOn, newShepherdState, parseShepherdCommand, parseShepherdState,
+  protectedHits, upsertShepherdComment, type EntryKind, type ShepherdState, type WaitingRun,
 } from "../core/shepherd.js";
 import { classifyConflictFile, isLockfile, manifestOf, unionLines } from "../core/shepherdconflict.js";
 import {
@@ -86,7 +86,12 @@ export interface ShepherdPayload {
     id: number; name?: string; path?: string; conclusion: string | null; head_sha: string; head_branch?: string; run_attempt?: number;
     pull_requests?: { number: number }[];
   };
-  check_suite?: { head_sha: string; pull_requests?: { number: number }[] };
+  check_suite?: { id?: number; head_sha: string; pull_requests?: { number: number }[] };
+  /** `status` event: commit status of an external service. */
+  sha?: string;
+  state?: string;
+  context?: string;
+  branches?: { name: string }[];
 }
 
 const isBot = (c: ShepherdCtx, s?: Sender) => !s || s.type === "Bot" || (s.login ?? "").endsWith("[bot]") || (!!c.botLogin && s.login === c.botLogin);
@@ -129,7 +134,7 @@ async function setState(c: ShepherdCtx, n: number, hist: ShepherdHistory, edit: 
   }, c.botLogin);
 }
 
-async function note(c: ShepherdCtx, n: number, hist: ShepherdHistory, e: { kind: EntryKind; what: string; changed: string; result: string; commit?: string; run?: string; fingerprints?: string[] }, patch: Partial<ShepherdState> = {}) {
+async function note(c: ShepherdCtx, n: number, hist: ShepherdHistory, e: { kind: EntryKind; what: string; changed: string; result: string; commit?: string; run?: string; fingerprints?: string[]; waiting?: WaitingRun }, patch: Partial<ShepherdState> = {}) {
   return setState(c, n, hist, (s) => addEntry({ ...s, ...patch }, { at: nowIso(c), ...e }));
 }
 
@@ -178,6 +183,7 @@ export async function runShepherd(c: ShepherdCtx, eventName: string, p: Shepherd
     case "pull_request": case "pull_request_target": return onPullRequest(c, p);
     case "workflow_run": return onWorkflowRun(c, p);
     case "check_suite": return onCheckSuite(c, p);
+    case "status": return onStatus(c, p);
     default: c.log.info(`Shepherd ignores the ${eventName} event.`);
   }
 }
@@ -248,13 +254,38 @@ async function onCheckSuite(c: ShepherdCtx, p: ShepherdPayload): Promise<void> {
   const n = cs?.pull_requests?.[0]?.number;
   if (!cs || !n) { c.log.info("check_suite has no PR; ignoring."); return; }
   const pr = await loadPull(c, n);
-  if (pr.head.sha !== cs.head_sha) { c.log.info("check_suite is not for the PR head; ignoring."); return; }
+  if (pr.head.sha !== cs.head_sha) { await dropStaleWaiting(c, pr); c.log.info("check_suite is not for the PR head; ignoring."); return; }
+  // Rule 7: a suite made only of Shepherd's own checks never re-evaluates anything.
+  if ((p.action ?? "completed") === "completed" && !(await ownSuite(c, cs.id))) {
+    const d = await reevaluateWaiting(c, pr);
+    if (d && d.action !== "skip") return;
+  }
   return onHeadChanged(c, pr, true);
+}
+
+/** A `status` event (an external service reported on a commit): a finished state may let a waiting decision go ahead. Pending states change nothing. */
+async function onStatus(c: ShepherdCtx, p: ShepherdPayload): Promise<void> {
+  const state = (p.state ?? "").toLowerCase();
+  if (!p.sha || !state || state === "pending") { c.log.info("status event is pending or has no sha; ignoring."); return; }
+  // Rule 7: never react to Shepherd's own lane check or workflow.
+  if (p.context && (p.context === CHECK_NAME || p.context === c.self?.name)) { c.log.info("Ignoring a status of Shepherd or MergeJudge itself."); return; }
+  const heads = [...new Set((p.branches ?? []).map((b) => b.name))].slice(0, 5);
+  let found: number | null = null;
+  for (const head of heads.length ? heads.map((b) => `${c.repo.owner}:${b}`) : [undefined]) {
+    const open = await c.ok.paginate(c.ok.rest.pulls.list, { ...c.repo, state: "open", ...(head ? { head } : {}), per_page: 100 });
+    const hit = open.find((x) => x.head.sha === p.sha);
+    if (hit) { found = hit.number; break; }
+  }
+  if (!found) { c.log.info(`No open PR has ${p.sha.slice(0, 7)} as its head; ignoring the status.`); return; }
+  const pr = await loadPull(c, found);
+  if (pr.head.sha !== p.sha) { await dropStaleWaiting(c, pr); return; }
+  await reevaluateWaiting(c, pr);
 }
 
 /** synchronize, or a check_suite finished: green status if everything passed, and a conflict check (never a routine base update). */
 async function onHeadChanged(c: ShepherdCtx, pr: PullLite, skipConflict = false): Promise<void> {
   if (!hasLabel(pr, SHEPHERD_LABEL)) return;
+  await dropStaleWaiting(c, pr);
   if (hasLabel(pr, NEEDS_HUMAN_LABEL)) { c.log.info(`#${pr.number} has needs-human; Shepherd waits for a human.`); return; }
   if (await refuseFork(c, pr)) return;
   const hist = await history(c, pr.number);
@@ -357,7 +388,6 @@ async function onWorkflowRun(c: ShepherdCtx, p: ShepherdPayload): Promise<void> 
   if (!run) return;
   // Rule 7: never react to the Shepherd workflow's own runs.
   if ((c.self?.name && run.name === c.self.name) || (run.path && c.self?.ref?.includes(run.path))) { c.log.info("Ignoring a run of the Shepherd workflow itself."); return; }
-  if (run.conclusion === "cancelled") { c.log.info("Run was cancelled (a newer push or a manual cancel); ignoring."); return; }
   if (!run.conclusion) return;
   const n = await findPull(c, run);
   if (!n) { c.log.info("No open PR for this run's branch; ignoring."); return; }
@@ -365,23 +395,75 @@ async function onWorkflowRun(c: ShepherdCtx, p: ShepherdPayload): Promise<void> 
   if (pr.state !== "open" || !hasLabel(pr, SHEPHERD_LABEL)) { c.log.info(`#${n} is not being shepherded; ignoring.`); return; }
   if (hasLabel(pr, NEEDS_HUMAN_LABEL)) { c.log.info(`#${n} has needs-human; Shepherd waits for a human.`); return; }
   if (await refuseFork(c, pr)) return;
-  if (run.head_sha !== pr.head.sha) { c.log.info(`Run is for ${run.head_sha.slice(0, 7)}, not the PR head ${pr.head.sha.slice(0, 7)}; ignoring.`); return; }
-  const runUrl = `${repoUrl(c)}/actions/runs/${run.id}`;
+  if (run.head_sha !== pr.head.sha) { await dropStaleWaiting(c, pr); c.log.info(`Run is for ${run.head_sha.slice(0, 7)}, not the PR head ${pr.head.sha.slice(0, 7)}; ignoring.`); return; }
   const hist = await history(c, n);
   const state = await readState(c, n);
   const runAttempt = run.run_attempt ?? 1;
   const rerunRequested = !!state?.entries.some((e) => e.run?.endsWith(`/actions/runs/${run.id}`) && /Re-running failed jobs/.test(e.result));
 
-  if (run.conclusion === "success") {
+  if (run.conclusion === "cancelled" || !FAILED.has(run.conclusion)) {
+    // Another run finished on the same head (any conclusion): a decision that waited for checks may be able to go ahead now.
+    const waited = await reevaluateWaiting(c, pr, run.id);
+    if (waited && waited.action !== "skip") return;
+    if (run.conclusion !== "success") { c.log.info(run.conclusion === "cancelled" ? "Run was cancelled (a newer push or a manual cancel); ignoring." : `Run conclusion ${run.conclusion} needs no action.`); return; }
     const d = decide({ needsHuman: false, on: true, maxAttempts: c.cfg.shepherd.max_attempts, grants: state?.grants, history: hist, headSha: pr.head.sha, runAttempt, conclusion: "success", failures: [], cantFix: { kind: "code" }, rerunRequested });
     if (d.action === "handoff") return handOff(c, n, { rule: d.rule, reason: d.reason, question: d.question });
     return onHeadChanged(c, pr, true);
   }
-  if (!FAILED.has(run.conclusion) && run.conclusion !== "failure") { c.log.info(`Run conclusion ${run.conclusion} needs no action.`); return; }
+  await evaluateFailedRun(c, pr, { id: run.id, conclusion: run.conclusion, attempt: runAttempt }, state, hist, false);
+}
+
+/**
+ * Re-evaluate the failed run a "waiting for checks" entry recorded, through the same decide() and act() as a fresh failure
+ * (every loop breaker applies). Runs only for the SAME head, with Shepherd on and no needs-human; a moved head drops the entry.
+ * Returns the decision, or null when nothing was waiting. `exceptRun`: the trigger is that run itself (a re-run), handled by its own event.
+ */
+async function reevaluateWaiting(c: ShepherdCtx, pr: PullLite, exceptRun?: number): Promise<Decision | null> {
+  if (!hasLabel(pr, SHEPHERD_LABEL) || hasLabel(pr, NEEDS_HUMAN_LABEL) || pr.state !== "open") return null;
+  const state = await dropStaleWaiting(c, pr);
+  const w = findWaiting(state, pr.head.sha);
+  if (!w || !state?.on) return null;
+  if (w.runId === exceptRun) { await clearWaiting(c, pr.number); return null; }
+  c.log.info(`#${pr.number}: head ${pr.head.sha.slice(0, 7)} has news; re-evaluating the failed run ${w.runId} that was waiting for checks.`);
+  return evaluateFailedRun(c, pr, { id: w.runId, conclusion: w.conclusion, attempt: w.attempt }, state, await history(c, pr.number), true);
+}
+
+/** Drop a waiting entry whose head is no longer the PR head (the new head gets its own events). Returns the current state. */
+async function dropStaleWaiting(c: ShepherdCtx, pr: PullLite): Promise<ShepherdState | null> {
+  const state = await readState(c, pr.number);
+  if (!state?.entries.some((e) => e.waiting && e.waiting.sha.toLowerCase() !== pr.head.sha.toLowerCase())) return state;
+  c.log.info(`#${pr.number}: the head moved to ${pr.head.sha.slice(0, 7)}; dropping the entry that was waiting for checks.`);
+  return setState(c, pr.number, await history(c, pr.number), (s) => dropWaiting(s, pr.head.sha));
+}
+
+async function clearWaiting(c: ShepherdCtx, n: number): Promise<void> {
+  await setState(c, n, await history(c, n), (s) => dropWaiting(s));
+}
+
+async function ownSuite(c: ShepherdCtx, suiteId?: number): Promise<boolean> {
+  if (!suiteId) return false;
+  try {
+    const runs = await c.ok.paginate(c.ok.rest.checks.listForSuite, { ...c.repo, check_suite_id: suiteId, per_page: 100 });
+    const mine = new Set(await selfCheckNames(c));
+    return runs.length > 0 && runs.every((r) => mine.has(r.name));
+  } catch { return false; }
+}
+
+/** A failed workflow run on the PR head: read its failed jobs, decide, act. `recheck`: a re-evaluation of a run that waited for checks. */
+async function evaluateFailedRun(c: ShepherdCtx, pr: PullLite, run: { id: number; conclusion: string; attempt: number }, state: ShepherdState | null, hist: ShepherdHistory, recheck: boolean): Promise<Decision> {
+  const n = pr.number;
+  const runUrl = `${repoUrl(c)}/actions/runs/${run.id}`;
+  const rerunRequested = !!state?.entries.some((e) => e.run?.endsWith(`/actions/runs/${run.id}`) && /Re-running failed jobs/.test(e.result));
 
   // Failed jobs and their log tails (redacted, last 200 lines, 20k chars max).
   const jobs = await c.ok.paginate(c.ok.rest.actions.listJobsForWorkflowRun, { ...c.repo, run_id: run.id, per_page: 100 });
   const failedJobs = jobs.filter((j) => j.conclusion && FAILED.has(j.conclusion));
+  if (recheck && !failedJobs.length) {
+    // The run was re-run or fixed since: nothing is left to decide on for it.
+    c.log.info(`Run ${run.id} no longer has failed jobs; dropping the entry that was waiting for checks.`);
+    await clearWaiting(c, n);
+    return { action: "skip", reason: "the waiting run has no failed jobs any more" };
+  }
   const logs: Record<string, string> = {};
   const fps: Fingerprint[] = [];
   for (const j of failedJobs) {
@@ -393,14 +475,17 @@ async function onWorkflowRun(c: ShepherdCtx, p: ShepherdPayload): Promise<void> 
   const cantFix = classifyFailure(failedJobs.map((j) => ({ name: j.name, conclusion: j.conclusion })), logs, (f) => isProtectedPath(f, c.cfg));
   const checks = await checkTally(c, pr);
   const d = decide({
-    needsHuman: false, on: true, maxAttempts: c.cfg.shepherd.max_attempts, grants: state?.grants, history: hist, headSha: pr.head.sha, runAttempt,
+    needsHuman: false, on: true, maxAttempts: c.cfg.shepherd.max_attempts, grants: state?.grants, history: hist, headSha: pr.head.sha, runAttempt: run.attempt,
     conclusion: run.conclusion, failures: fps, cantFix, rerunRequested, checks,
     stateFingerprints: state?.entries.flatMap((e) => e.fingerprints ?? []),
   });
-  return act(c, pr, d, { runUrl, runId: run.id, fps, logs, hist, cap: capOf(c, state), before: Math.max(1, checks.failing) });
+  // Anything but another wait settles the waiting entry (a fix moves the head, a hand-off stops Shepherd).
+  if (d.action !== "skip" && hasWaiting(state)) await clearWaiting(c, n);
+  await act(c, pr, d, { runUrl, runId: run.id, conclusion: run.conclusion, attempt: run.attempt, fps, logs, hist, cap: capOf(c, state), before: Math.max(1, checks.failing) });
+  return d;
 }
 
-interface FailCtx { runUrl: string; runId: number; fps: Fingerprint[]; logs: Record<string, string>; hist: ShepherdHistory; cap: number;
+interface FailCtx { runUrl: string; runId: number; conclusion: string; attempt: number; fps: Fingerprint[]; logs: Record<string, string>; hist: ShepherdHistory; cap: number;
   /** Failing checks on the head before the fix (L4 baseline, trailer `MergeJudge-Shepherd-Failures`); at least 1, as the run itself failed. */
   before: number }
 
@@ -409,7 +494,11 @@ async function act(c: ShepherdCtx, pr: PullLite, d: Decision, f: FailCtx): Promi
   const first = f.fps[0];
   const what = first ? `${first.job}: ${first.raw}` : "failed run";
   switch (d.action) {
-    case "skip": c.log.info(d.reason); return;
+    case "skip":
+      c.log.info(d.reason);
+      // Undecided only because checks on the head are pending: remember the failed run so a later trigger for this head re-evaluates it.
+      if (d.pending) await setState(c, n, f.hist, (s) => addWaiting(s, { at: nowIso(c), kind: "ci", what, changed: "nothing pushed", result: "Waiting for checks on the head to finish; Shepherd re-evaluates this run when they do", commit: pr.head.sha, run: f.runUrl }, { sha: pr.head.sha, runId: f.runId, conclusion: f.conclusion, attempt: f.attempt }));
+      return;
     case "green": return onHeadChanged(c, pr, true);
     case "rerun":
       await c.ok.rest.actions.reRunWorkflowFailedJobs({ ...c.repo, run_id: f.runId });

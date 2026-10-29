@@ -362,6 +362,7 @@ describe("auto routing", () => {
     expect(routeAutoMode("pull_request", { action: "synchronize" })).toBe("triage");
     expect(routeAutoMode("workflow_run", {})).toBe("shepherd");
     expect(routeAutoMode("check_suite", {})).toBe("shepherd");
+    expect(routeAutoMode("status", {})).toBe("shepherd");
     expect(routeAutoMode("schedule", {})).toBe("propose");
     expect(routeAutoMode("workflow_dispatch", {})).toBe("propose");
   });

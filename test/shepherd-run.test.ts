@@ -513,6 +513,124 @@ describe("L4 baseline across all checks on the head", () => {
   });
 });
 
+describe("waiting for checks: re-evaluation on later triggers", () => {
+  const job = (id: number, name: string, tag: string) => ({ id, name, conclusion: "failure", log: failLog(`TypeError: ${tag} broke ${name}`) });
+  const failed = (name: string, id: number) => ({ id, name, status: "completed", conclusion: "failure" });
+  const slow = (done: boolean) => ({ id: 2, name: "slow", status: done ? "completed" : "in_progress", conclusion: done ? "success" : null });
+  const waiting = (st: ReturnType<typeof fakeGh>["st"]) => lastState(st).entries.filter((e) => e.waiting);
+  const suite = (gh: ReturnType<typeof fakeGh>): ShepherdPayload => ({ action: "completed", check_suite: { id: 5, head_sha: gh.pull().head.sha, pull_requests: [{ number: 7 }] } });
+  const status = (gh: ReturnType<typeof fakeGh>, state: string, context = "ext/ci"): ShepherdPayload => ({ sha: gh.pull().head.sha, state, context, branches: [{ name: "feature" }] });
+  /** One failed job, one slow check still running: Shepherd records the wait. */
+  const pending = (over: Parameters<typeof fakeGh>[1] = {}, calls = { n: 0 }) => {
+    const s = setup({ jobs: [job(1, "test", "first")], checkRuns: [failed("test", 1), slow(false)], ...over }, { provider: textProvider(files("src/a.ts", "export const a = 7;\n"), calls) });
+    return { ...s, calls };
+  };
+
+  it("records one waiting entry with the head sha and the failed run id, and a duplicate pending event adds nothing", async () => {
+    const { gh, run, repo } = pending();
+    const tip = repo.tip("feature");
+    await run(wr(gh));
+    const w = waiting(gh.st);
+    expect(w).toHaveLength(1);
+    expect(w[0]!.waiting).toMatchObject({ sha: tip, runId: 100, conclusion: "failure" });
+    expect(w[0]!.result).toContain("Waiting for checks");
+    expect(w[0]!.run).toContain("/actions/runs/100");
+    const entries = lastState(gh.st).entries.length;
+    await run(wr(gh)); // the same event delivered again
+    await run(suite(gh), "check_suite"); // a trigger while everything is still pending
+    expect(lastState(gh.st).entries).toHaveLength(entries);
+    expect(waiting(gh.st)).toHaveLength(1);
+    await run(wr(gh, { id: 101 })); // a newer failed run on the same head replaces the entry
+    expect(waiting(gh.st).map((e) => e.waiting!.runId)).toEqual([101]);
+    expect(handoffs(gh.st)).toHaveLength(0);
+    expect(repo.tip("feature")).toBe(tip);
+  });
+
+  it("a pending external status, then the status turning failure, re-evaluates and stops on L4", async () => {
+    const reply = () => { let v = 6; return textProvider(() => files("src/a.ts", `export const a = ${++v};\n`)); };
+    const { repo, gh, run } = setup({ jobs: [job(1, "j1", "first"), job(2, "j2", "first")] }, { provider: reply() });
+    await run(wr(gh));
+    const c1 = repo.tip("feature");
+    expect(tipMsg(repo)).toContain("MergeJudge-Shepherd-Failures: 2");
+    gh.st.jobs = [job(1, "j1", "second")];
+    gh.st.statuses = [{ id: 1, context: "ext/ci", state: "pending" }];
+    await run(wr(gh, { id: 101 }));
+    expect(waiting(gh.st)).toHaveLength(1);
+    expect(handoffs(gh.st)).toHaveLength(0);
+    await run(status(gh, "pending"), "status"); // pending statuses are ignored
+    expect(handoffs(gh.st)).toHaveLength(0);
+    gh.st.statuses = [{ id: 2, context: "ext/ci", state: "failure" }];
+    await run(status(gh, "failure"), "status");
+    expect(repo.tip("feature")).toBe(c1);
+    const b = handoffs(gh.st)[0]!.body;
+    expect(b).toContain("Loop breaker L4");
+    expect(b).toContain("2 before, 2 now");
+    expect(gh.st.labels.has("needs-human")).toBe(true);
+    expect(waiting(gh.st)).toHaveLength(0);
+  });
+
+  it("a pending check, then a check_suite completion with everything passing except the original, continues to a fix attempt", async () => {
+    const { repo, gh, run, calls } = pending();
+    const tip = repo.tip("feature");
+    await run(wr(gh));
+    expect(repo.tip("feature")).toBe(tip);
+    gh.st.checkRuns = [failed("test", 1), slow(true)];
+    await run(suite(gh), "check_suite");
+    expect(repo.tip("feature")).not.toBe(tip);
+    expect(calls.n).toBe(1);
+    expect(tipMsg(repo)).toContain("MergeJudge-Shepherd: attempt 1");
+    expect(tipMsg(repo)).toContain("MergeJudge-Shepherd-Failures: 1");
+    expect(waiting(gh.st)).toHaveLength(0);
+  });
+
+  it("another workflow's run finishing (any conclusion, even success) re-evaluates the waiting run", async () => {
+    const { repo, gh, run } = pending();
+    const tip = repo.tip("feature");
+    await run(wr(gh));
+    gh.st.checkRuns = [failed("test", 1), slow(true)];
+    await run(wr(gh, { name: "Other", path: ".github/workflows/other.yml", conclusion: "success", id: 200 }));
+    expect(repo.tip("feature")).not.toBe(tip);
+    expect(tipMsg(repo)).toContain("MergeJudge-Shepherd: attempt 1");
+  });
+
+  it("Shepherd's own workflow run never triggers the re-evaluation (rule 7), and neither does needs-human", async () => {
+    const { repo, gh, run } = pending();
+    const tip = repo.tip("feature");
+    await run(wr(gh));
+    gh.st.checkRuns = [failed("test", 1), slow(true)];
+    await run(wr(gh, { name: "Shepherd", conclusion: "success", id: 201 }));
+    await run({ sha: gh.pull().head.sha, state: "success", context: "mergejudge/lane", branches: [{ name: "feature" }] }, "status");
+    expect(repo.tip("feature")).toBe(tip);
+    gh.st.labels.add("needs-human");
+    await run(suite(gh), "check_suite");
+    await run(status(gh, "success"), "status");
+    expect(repo.tip("feature")).toBe(tip);
+    expect(waiting(gh.st)).toHaveLength(1);
+  });
+
+  it("a head SHA change drops the waiting entry, and the old run is not re-evaluated", async () => {
+    const { repo, gh, run, calls } = pending();
+    await run(wr(gh));
+    expect(waiting(gh.st)).toHaveLength(1);
+    const moved = repo.commit("feature", { "src/keep.ts": "export const k = 2;\n" }, "pr: push more");
+    gh.st.checkRuns = [failed("test", 1), slow(true)];
+    await run({ action: "synchronize", pull_request: { number: 7 } }, "pull_request");
+    expect(waiting(gh.st)).toHaveLength(0);
+    await run(suite(gh), "check_suite");
+    expect(repo.tip("feature")).toBe(moved);
+    expect(calls.n).toBe(0);
+    expect(handoffs(gh.st)).toHaveLength(0);
+  });
+
+  it("a trigger after the head moved also drops it (workflow_run for the new head)", async () => {
+    const { repo, gh, run } = pending();
+    await run(wr(gh));
+    repo.commit("feature", { "src/keep.ts": "export const k = 3;\n" }, "pr: push more");
+    await run(wr(gh, { name: "Other", conclusion: "success", id: 300 }));
+    expect(waiting(gh.st)).toHaveLength(0);
+  });
+});
+
 describe("L5 review path", () => {
   const patch = "@@ -1,2 +1,3 @@\n keep\n+const token = readSecret();\n+return token;";
   const reply = JSON.stringify({ summary: "s", files: [{ path: "a.ts", lane: "review", findings: [{ line: 2, quote: "const token = readSecret();", message: "m", suggestion: "const token = readSecret(ctx);" }] }] });

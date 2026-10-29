@@ -12,6 +12,9 @@ on:
   workflow_run:
     workflows: ["CI"]
     types: [completed]
+  # A finished external status (a deploy preview, a third-party CI) lets Shepherd decide on a failure it was holding back
+  # while checks were still pending. Pending statuses are ignored.
+  status:
 
 # contents: write to push fixes, pull-requests/issues for labels and comments,
 # checks and actions: read to see failures, actions: write only so Shepherd can re-run a failed job once to rule out a flaky test.
@@ -23,7 +26,7 @@ permissions:
   actions: write
 
 concurrency:
-  group: shepherd-${{ github.event.pull_request.number || github.event.issue.number || github.event.workflow_run.head_branch }}
+  group: shepherd-${{ github.event.pull_request.number || github.event.issue.number || github.event.workflow_run.head_branch || github.event.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -33,7 +36,8 @@ jobs:
     if: >-
       (github.event_name == 'issue_comment' && github.event.issue.pull_request) ||
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.head_repository.full_name == github.repository)
+      (github.event_name == 'workflow_run' && github.event.workflow_run.head_repository.full_name == github.repository) ||
+      (github.event_name == 'status' && github.event.state != 'pending')
     steps:
       # Check out the PR branch with full history. For comment events there is no PR ref, so Shepherd fetches the branch itself.
       - uses: actions/checkout@v4

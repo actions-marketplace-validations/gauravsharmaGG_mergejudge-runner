@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { addEntry, addGrant, newShepherdState, parseShepherdState, readShepherdState, renderShepherdComment, type ShepherdState } from "../core/shepherd.js";
 import { runShepherd, type ShepherdPayload } from "../src/shepherd.js";
-import { fakeGh, makeCtx, makeRepo, stateComment } from "./support/shepherdkit.js";
+import { fakeGh, git, handoffs, makeCtx, makeRepo, stateComment, type Repo3 } from "./support/shepherdkit.js";
+
+const dirty = (repo: Repo3) => git(repo.ws, "status", "--porcelain");
+const sync: ShepherdPayload = { action: "synchronize", pull_request: { number: 7 } };
+function conflictRepo(files: Record<string, string>, feature: Record<string, string>, main: Record<string, string>, over: Parameters<typeof fakeGh>[1] = {}, ctxOver: Parameters<typeof makeCtx>[2] = {}, cfg = "") {
+  const repo = makeRepo(files);
+  repo.commit("feature", feature, "pr change");
+  repo.commit("main", main, "base change");
+  const gh = fakeGh(repo, { mergeable: false, ...over });
+  const ctx = makeCtx(repo, gh, ctxOver, cfg);
+  return { repo, gh, ctx, run: (p: ShepherdPayload, ev = "pull_request") => runShepherd(ctx, ev, p) };
+}
 
 const URL = "https://github.com/o/r";
 const bot = { type: "Bot", login: "mj[bot]" };
@@ -66,5 +77,48 @@ describe("one state comment per PR (concurrency race)", () => {
     expect(s.grants).toBe(1);
     expect(s.grantLog[0]!.who).toBe("rival");
     expect(gh.st.comments).toHaveLength(1);
+  });
+});
+
+describe("H1 comes first (live PR 11)", () => {
+  const readme = "# Title\n\nIntro.\n";
+  it("a logic conflict plus an incoming .github change reports H1, not H4", async () => {
+    const { repo, gh, run } = conflictRepo(
+      { "README.md": readme, ".github/workflows/ci.yml": "name: ci\n" },
+      { "README.md": readme + "\nfunction fromPr() { return 1; }\n" },
+      { "README.md": readme + "\nfunction fromBase() { return 2; }\n", ".github/workflows/ci.yml": "name: ci2\n" },
+    );
+    const before = repo.tip("feature");
+    await run(sync);
+    expect(repo.tip("feature")).toBe(before);
+    expect(dirty(repo)).toBe("");
+    const b = handoffs(gh.st)[0]!.body;
+    expect(b).toContain("Hand-off H1");
+    expect(b).not.toContain("Hand-off H4");
+    expect(b).toContain(".github/workflows/ci.yml");
+    expect(gh.st.labels.has("needs-human")).toBe(true);
+    expect(handoffs(gh.st)).toHaveLength(1);
+  });
+
+  it("oversized + protected reports H1", async () => {
+    const many = (p: string) => Array.from({ length: 60 }, (_, i) => `import ${p}${i} from "${p}${i}";`).join("\n") + "\n";
+    const { repo, gh, run } = conflictRepo(
+      { "src/m.ts": 'import z from "z";\n' },
+      { "src/m.ts": 'import z from "z";\n' + many("p") },
+      { "src/m.ts": 'import z from "z";\n' + many("q"), ".github/workflows/ci.yml": "name: ci\n" },
+    );
+    const before = repo.tip("feature");
+    await run(sync);
+    expect(repo.tip("feature")).toBe(before);
+    expect(dirty(repo)).toBe("");
+    const b = handoffs(gh.st)[0]!.body;
+    expect(b).toContain("Hand-off H1");
+    expect(b).not.toContain("Hand-off H2");
+  });
+
+  it("a conflict inside a protected file still reports H1 with the conflict wording", async () => {
+    const { gh, run } = conflictRepo({ "deploy.sh": "echo 1\n" }, { "deploy.sh": "echo 2\n" }, { "deploy.sh": "echo 3\n" });
+    await run(sync);
+    expect(handoffs(gh.st)[0]!.body).toContain("merge conflict is in a protected path");
   });
 });

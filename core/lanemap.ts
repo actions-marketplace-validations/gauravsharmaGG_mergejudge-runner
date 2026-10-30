@@ -1,5 +1,5 @@
 import type { Aggregate } from "./aggregate.js";
-import { LANE_ORDER, maxLane, type FileVerdict, type Lane } from "./types.js";
+import { LANE_ORDER, maxLane, type Lane } from "./types.js";
 
 /** Lane-choice map (opt-in `review.lane_map`): explains how the PR lane was reached. Explanatory only, never changes a lane. */
 
@@ -156,12 +156,12 @@ export function buildLaneMapGif(agg: MapAgg): Uint8Array {
 /* ---------- markdown ---------- */
 
 export interface LaneMapOptions {
-  /** Sticky renderer already supplies the outcome at the top. */
-  omitOutcome?: boolean;
   /** https URL of a hosted copy of `buildLaneMapGif` output. Embedded only when it is a plain https URL. */
   imageUrl?: string;
   /** MergeJudge panel URL; one optional link line, the map stands alone without it. */
   panelUrl?: string;
+  /** Add the folder (bucket) table. The sticky only asks for it on big PRs, where a flat file list stops being scannable. */
+  buckets?: boolean;
 }
 
 const plainHttps = (u?: string) => (u && /^https:\/\/[^\s()<>"'`]+$/.test(u) ? u : undefined);
@@ -172,49 +172,20 @@ export interface LaneMapRenderEnv {
   escape: (s: string) => string;
   maxRows: number;
   more: (shown: number, total: number) => string[];
-  checkName: string;
-  /** Escaped reason text, including any additional AI explanation. */
-  reason?: (file: FileVerdict) => string;
 }
 
-export function renderLaneMap(agg: MapAgg, env: LaneMapRenderEnv, opts: LaneMapOptions = {}): string[] {
+/** Lane-map parts for the sticky's Files section: optional image, folder table and panel link. The outcome and file list live in render.ts. */
+export function renderLaneMap(agg: Pick<Aggregate, "lane" | "files">, env: LaneMapRenderEnv, opts: LaneMapOptions = {}): string[] {
   const { emoji, escape: esc } = env;
-  const buckets = groupBuckets(agg);
   const out: string[] = [];
   const img = plainHttps(opts.imageUrl);
   if (img) out.push(`![Lane map](${img})`, "", "_Decision path: PR opened → directory buckets → label / PR holds → final lane; green = auto, amber = review, red = block._", "");
-  const raisers = agg.files.filter((f) => agg.lane !== "auto" && f.lane === agg.lane);
-  const causes = [
-    ...raisers.slice(0, env.maxRows).map((f) => esc(f.path)),
-    ...(raisers.length > env.maxRows ? [`${raisers.length - env.maxRows} more files`] : []),
-    ...agg.labelReasons.slice(0, env.maxRows).map(esc),
-  ];
-  const why = causes.length
-    ? `raised by ${causes.join("; ")}`
-    : agg.lane === "auto" ? `all ${agg.files.length} files are auto; no holds raised the lane` : "no file or hold reason supplied";
-  if (!opts.omitOutcome) out.push(`Why this lane? ${emoji[agg.lane]} \`${agg.lane}\` — ${why}.`, "");
-  const counts = { auto: 0, review: 0, block: 0 };
-  for (const f of agg.files) counts[f.lane]++;
-  out.push(`${emoji.auto} \`auto ${counts.auto}\` · ${emoji.review} \`review ${counts.review}\` · ${emoji.block} \`block ${counts.block}\` · **${agg.files.length} files total**`, "", "### 🗺️ Lane choice map", "");
+  const buckets = opts.buckets ? groupBuckets(agg) : [];
   if (buckets.length) {
-    out.push("| Bucket | " + emoji.auto + " auto | " + emoji.review + " review | " + emoji.block + " block |", "|---|---|---|---|");
-    for (const b of buckets.slice(0, env.maxRows)) {
-      out.push(`| ${esc(b.name)} | ${b.counts.auto} | ${b.counts.review} | ${b.counts.block} |`);
-    }
+    out.push("| Folder | " + emoji.auto + " auto | " + emoji.review + " review | " + emoji.block + " block |", "|---|---|---|---|");
+    for (const b of buckets.slice(0, env.maxRows)) out.push(`| ${esc(b.name)} | ${b.counts.auto} | ${b.counts.review} | ${b.counts.block} |`);
     out.push(...env.more(env.maxRows, buckets.length), "");
   }
-  if (agg.files.length) {
-    // Sort a copy before capping so late input paths that raise the lane are never displaced by auto files.
-    const files = [...agg.files].sort((a, b) => LANE_ORDER[b.lane] - LANE_ORDER[a.lane]);
-    out.push(`### File lanes (${agg.files.length})`, "", "Raisers first, then other review/block files, then auto files (up to " + env.maxRows + " rows).", "",
-      "| File | Lane | Source | Reason |", "|---|---|---|---|");
-    for (const f of files.slice(0, env.maxRows)) {
-      const raised = agg.lane !== "auto" && f.lane === agg.lane ? " · **raiser**" : "";
-      out.push(`| ${esc(f.path)} | ${emoji[f.lane]} \`${f.lane}\`${raised} | ${esc(f.source ?? "rule")} | ${env.reason?.(f) || esc(f.reasons.join("; ")) || "-"} |`);
-    }
-    out.push(...env.more(env.maxRows, files.length), "");
-  }
-  out.push(`${emoji.review} \`review\` is advisory (\`${env.checkName}\` stays neutral); ${emoji.block} \`block\` fails \`${env.checkName}\`. The map only explains the lane.`, "");
   const panel = plainHttps(opts.panelUrl);
   if (panel) out.push(`[Deeper view in MergeJudge panel](${panel})`, "");
   return out;

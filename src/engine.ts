@@ -246,12 +246,12 @@ export async function runClaude(prompt: string, signal: AbortSignal, o: EngineOp
 }
 
 /** One `codex exec` invocation; the schema and the last-message file live in a private temp dir that is the child's cwd. */
-export async function runCodex(prompt: string, signal: AbortSignal, o: EngineOptions = {}): Promise<string> {
+export async function runCodex(prompt: string, signal: AbortSignal, o: EngineOptions = {}, outputSchema?: Record<string, unknown>): Promise<string> {
   if (signal.aborted) throw abortReason(signal);
   const cwd = await mkdtemp(join(tmpdir(), "mjr-codex-"));
   try {
     const schemaFile = join(cwd, "schema.json"), outFile = join(cwd, "last-message.txt");
-    await writeFile(schemaFile, JSON.stringify(CODEX_OUTPUT_SCHEMA), { mode: 0o600 });
+    await writeFile(schemaFile, JSON.stringify(outputSchema ?? CODEX_OUTPUT_SCHEMA), { mode: 0o600 });
     const args = codexArgs({ model: o.model, effort: o.effort ?? DEFAULT_CODEX_EFFORT, schemaFile, outFile });
     await spawnCli({ bin: o.bin ?? "codex", args, env: engineEnv(o.env, "codex"), cwd, stdin: prompt, signal, killGraceMs: o.killGraceMs });
     let last: string;
@@ -277,9 +277,11 @@ export class EngineProvider implements LlmProvider {
     if (this.fatal) throw this.fatal;
     this.calls++;
     const prompt = `${req.system}\n\n${req.user}`;
+    const signal = req.budgetMs ? AbortSignal.any([this.signal, AbortSignal.timeout(req.budgetMs)]) : this.signal;
     try {
-      return this.engine === "codex" ? await runCodex(prompt, this.signal, this.opts) : await runClaude(prompt, this.signal, this.opts, this.engine);
+      return this.engine === "codex" ? await runCodex(prompt, signal, this.opts, req.outputSchema) : await runClaude(prompt, signal, this.opts, this.engine);
     } catch (e) {
+      if (req.outputSchema) throw e; // advisory story failures must not poison the engine
       this.fatal = e instanceof EngineError ? e : new EngineError("exit", (e as Error).message);
       throw this.fatal;
     }

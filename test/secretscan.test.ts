@@ -1,3 +1,4 @@
+import { validateStory } from "../core/story.js";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -121,6 +122,14 @@ describe("applyRunnerSecretHits", () => {
     applyRunnerSecretHits(r, new Map([["dist/v.js", ["AWS access key"]]]), { notes: ["Deep mode on a runner with a local clone: test note."] });
     expect(r.body).toContain("Deep mode on a runner with a local clone: test note.");
     expect(r.body).toContain("full local diff");
+  });
+  it("preserves the story, hosted URL and style when re-rendering", () => {
+    const r = resultOf([{ path: "a.ts", status: "modified", additions: 1, deletions: 0 }]);
+    r.story = validateStory({ steps: ["Read the input", "Return the result"].map(title => ({ title, refs: [{ path: "a.ts" }] })) }, [{ path: "a.ts" }]);
+    r.storyImageUrl = "https://example.com/story.svg"; r.storyStyle = "svg"; r.storyAnimate = false;
+    applyRunnerSecretHits(r, new Map([["a.ts", ["test secret kind"]]]));
+    expect(r.body).toContain('<img src="https://example.com/story.svg"');
+    expect(r.body).toContain("Steps: 1. Read the input; 2. Return the result");
   });
   it("does nothing without hits, and does not double-report a file the rules already blocked", () => {
     const r = resultOf([{ path: "a.ts", status: "modified", additions: 1, deletions: 0, patch: `@@ -1 +1 @@\n+k=${REAL_AWS}` }]);

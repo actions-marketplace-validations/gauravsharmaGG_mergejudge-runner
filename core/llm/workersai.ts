@@ -1,4 +1,4 @@
-import { LlmError, rejectOnAbort, withLlmRetries, type LlmTransport } from "./http.js";
+import { LlmError, rejectOnAbort, withCallBudget, withLlmRetries, type LlmTransport } from "./http.js";
 import { isTruncated, openAiUsage, reportUsage, tokenCount, type LlmProvider, type LlmRequest, type LlmResult, type UsageSink } from "./provider.js";
 
 /** The slice of the Cloudflare Workers AI binding (`env.AI`) MergeJudge uses. */
@@ -32,7 +32,7 @@ export class WorkersAiProvider implements LlmProvider {
         void pending.catch(() => {}); // a late rejection after we stop waiting must not surface as unhandled
         return Promise.race([pending, rejectOnAbort(signal)]);
       },
-      { ...this.transport, providerId: this.providerId },
+      withCallBudget({ ...this.transport, providerId: this.providerId }, req.budgetMs, req.maxRetries),
     )) as { response?: unknown; choices?: { message?: { content?: unknown }; finish_reason?: unknown }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
     const u = out?.usage;
     reportUsage(this.onUsage, u && typeof u === "object" ? openAiUsage(u.prompt_tokens, u.completion_tokens, 0) : null);

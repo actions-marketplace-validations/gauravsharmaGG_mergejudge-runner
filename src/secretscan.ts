@@ -119,6 +119,7 @@ export function applyRunnerSecretHits(result: ReviewResult, hits: Map<string, st
   result.usage.lane = "block";
   agg.explanation = explainLane(agg);
   result.body = renderComment({
+    story: result.story, storyStyle: result.storyStyle, storyAnimate: result.storyAnimate, storyImageUrl: result.storyImageUrl,
     agg, mode: result.usage.model ?? "runner", tokensEstimate: result.usage.tokens,
     notes: [...(ctx.notes ?? []), SCAN_NOTE],
     policyFiles: ctx.policyFiles, fileFindings: result.findings.filter((f) => f.line === undefined),

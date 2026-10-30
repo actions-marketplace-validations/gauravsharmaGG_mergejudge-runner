@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { explainLane, type Aggregate } from "./aggregate.js";
 import { renderFeedback } from "./feedback.js";
 import { renderLaneMap } from "./lanemap.js";
+import { renderStorySection, type Story } from "./story.js";
 import type { RubricResult } from "./rubrics.js";
 import { LANE_ORDER, type FileVerdict, type Lane } from "./types.js";
 
@@ -62,6 +63,12 @@ export interface RenderInput {
   laneMapImageUrl?: string;
   /** Optional MergeJudge panel URL; adds one link line to the Files section. The sticky stands alone without it. */
   panelUrl?: string;
+  /** comment.flow_chart: the validated PR story, drawn as a collapsed SVG image or Mermaid chart after "What to check". Dropped first when the comment is over the size cap. */
+  story?: Story | null;
+  /** comment.flow_chart_animate (default true): animate edges on new or changed paths. */
+  storyAnimate?: boolean;
+  storyStyle?: "svg" | "mermaid";
+  storyImageUrl?: string | null;
 }
 
 /** The findings that carry a verified diff line (the ones that become inline comments). */
@@ -362,8 +369,11 @@ export function renderComment(r: RenderInput): string {
   const out: string[] = [MARKER, "## ⚖️ MergeJudge", ""];
   out.push(...outcomeLines(agg, flagged.length, problems, r.lineFindings?.length ?? 0));
   out.push(escapeMd(agg.summary), "");
-  out.push(...whatToCheck(r, rubricOpen), ...whyThisLane(r, flagged), ...filesSection(r, flagged, safe), ...allChecks(rubric));
-  const head = out.join("\n");
+  const checks = whatToCheck(r, rubricOpen);
+  const rest = [...whyThisLane(r, flagged), ...filesSection(r, flagged, safe), ...allChecks(rubric)];
+  const chart = r.story ? renderStorySection(r.story, r.storyAnimate !== false, r.storyStyle, r.storyImageUrl) : [];
+  const list = r.story ? renderStorySection(r.story, false, r.storyStyle, null, false) : [];
+  const headOf = (section: string[]) => [...out, ...checks, ...section, ...rest].join("\n");
   // The tail is never cut by the size cap: what was not checked, the feedback block and the footer.
   const unchecked = notChecked(r);
   const tail: string[] = [...(unchecked ? [unchecked] : []), "---", "", renderFeedback(rubric), ""];
@@ -381,7 +391,12 @@ export function renderComment(r: RenderInput): string {
     "",
     "</details>",
   );
-  return capBody(head, "\n" + tail.join("\n"));
+  const tailText = "\n" + tail.join("\n");
+  // The chart is the first thing to go when the comment is over the cap.
+  let head = headOf(chart);
+  if (head.length + tailText.length > MAX_COMMENT_CHARS) head = headOf(list);
+  if (head.length + tailText.length > MAX_COMMENT_CHARS) head = headOf([]);
+  return capBody(head, tailText);
 }
 
 export const CHECK_NAME = "mergejudge/lane";

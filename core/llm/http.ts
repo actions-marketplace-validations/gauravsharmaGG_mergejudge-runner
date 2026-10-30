@@ -218,7 +218,8 @@ function fill(partial?: Partial<LlmTransport>): LlmTransport {
 }
 
 /** Lower the call budget (and the per-attempt timeout with it) to `budgetMs` when given. Never raises it. */
-export function withCallBudget(t: Partial<LlmTransport>, budgetMs?: number): Partial<LlmTransport> {
+export function withCallBudget(t: Partial<LlmTransport>, budgetMs?: number, maxRetries?: number): Partial<LlmTransport> {
+  if (maxRetries !== undefined) t = { ...t, maxRetries: Math.min(t.maxRetries ?? LLM_HTTP_DEFAULTS.maxRetries, maxRetries), maxTimeoutRetries: Math.min(t.maxTimeoutRetries ?? LLM_HTTP_DEFAULTS.maxTimeoutRetries, maxRetries) };
   if (typeof budgetMs !== "number" || !Number.isFinite(budgetMs)) return t;
   const cap = Math.max(1, Math.floor(budgetMs));
   return { ...t, budgetMs: Math.min(t.budgetMs ?? LLM_HTTP_DEFAULTS.budgetMs, cap) };

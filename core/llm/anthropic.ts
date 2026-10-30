@@ -41,7 +41,7 @@ export class AnthropicProvider implements LlmProvider {
   }
   private url() { return `${this.baseUrl.replace(/\/+$/, "")}/v1/messages`; }
   private headers() { return { "x-api-key": this.apiKey, "anthropic-version": "2023-06-01" }; }
-  private http(budgetMs?: number): Partial<LlmTransport> { return withCallBudget({ ...this.transport, providerId: this.providerId }, budgetMs); }
+  private http(budgetMs?: number, maxRetries?: number): Partial<LlmTransport> { return withCallBudget({ ...this.transport, providerId: this.providerId }, budgetMs, maxRetries); }
   private empty(): never { throw new LlmError("parse", { provider: this.providerId }); }
   async complete(req: LlmRequest): Promise<string> {
     const r = await this.completeEx(req);
@@ -58,7 +58,7 @@ export class AnthropicProvider implements LlmProvider {
         system: req.system,
         messages: [{ role: "user", content: req.user }],
       },
-      this.http(),
+      this.http(req.budgetMs, "maxRetries" in req && typeof req.maxRetries === "number" ? req.maxRetries : undefined),
     )) as { content?: { type: string; text?: string }[]; usage?: AnthropicUsage; stop_reason?: unknown };
     reportUsage(this.onUsage, anthropicUsage(data.usage));
     const text = (data.content ?? [])
@@ -81,7 +81,7 @@ export class AnthropicProvider implements LlmProvider {
           ? { tools: req.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })) }
           : {}),
       },
-      this.http(req.budgetMs),
+      this.http(req.budgetMs, "maxRetries" in req && typeof req.maxRetries === "number" ? req.maxRetries : undefined),
     )) as {
       content?: { type: string; text?: string; id?: string; name?: string; input?: unknown }[];
       usage?: AnthropicUsage;

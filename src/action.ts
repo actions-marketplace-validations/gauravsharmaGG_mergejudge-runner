@@ -15,6 +15,7 @@ import { redact, redactedLogs } from "./redact.js";
 import { explicitReviewMode, withAiMode } from "./deep.js";
 import { securityRequested, withSecurityMode } from "./security.js";
 import { retrieveFromWorkspace, WorkspaceError } from "./workspace.js";
+import { branchStoryImage } from "../core/storyhost.js";
 
 /** Secrets seen this run. Action log lines are redacted with these plus the shared token/header patterns. */
 const secretSink: string[] = [];
@@ -89,7 +90,10 @@ async function runTriageMode(): Promise<void> {
   if (!pr) { log.info("Not a pull_request event; nothing to do."); return; }
   const { ok, repo, appToken, botLogin } = await auth();
   const { cfg, cfgRef } = await loadCfg(ok, repo, { ref: pr.base?.ref, sha: pr.base?.sha });
+  const storyImage = cfg.comment.flow_chart && cfg.comment.flow_chart_host === "branch"
+    ? await branchStoryImage(ok, repo, github.context.payload.repository?.private, log) : undefined;
   const lane = await runReview({
+    storyImage,
     ok, repo, pr: pr as unknown as ReviewPr, cfg, cfgRef, appToken, botLogin,
     configPaths: [core.getInput("config_path")].filter(Boolean),
     // review.mode: deep reads the repo from the actions/checkout workspace; without one it falls back to context mode.
@@ -116,6 +120,9 @@ async function shepherdCtx(log: ReturnType<typeof logs>): Promise<ShepherdCtx> {
   // Policy comes from the BASE branch of the PR (the default branch for comment events).
   const pl = github.context.payload;
   let base: { ref?: string; sha?: string } | undefined = pl.pull_request?.base ?? pl.workflow_run?.pull_requests?.[0]?.base ?? pl.check_suite?.pull_requests?.[0]?.base;
+  // A push to a base branch (the conflict sweep): that branch's config applies. schedule and workflow_dispatch use the default branch.
+  const pushed = github.context.eventName === "push" ? /^refs\/heads\/(.+)$/.exec(String(pl.ref ?? ""))?.[1] : undefined;
+  if (!base && pushed) base = { ref: pushed };
   if (!base && pl.issue?.number) {
     try { base = (await ok.rest.pulls.get({ ...repo, pull_number: pl.issue.number })).data.base; } catch { /* default branch */ }
   }

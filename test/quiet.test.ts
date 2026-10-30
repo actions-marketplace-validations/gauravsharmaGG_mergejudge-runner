@@ -34,15 +34,15 @@ describe("quiet evidence gate", () => {
     expect(planInline(llm.findings, []).create).toHaveLength(0);
   });
 
-  it("lists unverified findings under needs human with a count, plus the lane coach", () => {
+  it("lists unverified findings as human checks with a count, plus the advisory and branch-protection tips", () => {
     const llm = run([{ line: 2, message: "no <quote>" }, { line: 3, message: "also none" }]);
     const agg = { lane: "review", summary: "x", files: [], labelReasons: [], reasons: [] } as never;
     const md = renderComment({ agg, mode: "m", tokensEstimate: 0, notes: [], fileFindings: llm.findings });
-    expect(md).toContain("Needs human (2)");
-    expect(md).toContain("2 findings need human validation (no verified diff quote)");
+    expect(md).toContain("2 problems found");
+    expect(md.match(/needs a human check \(no verified line\)/g)).toHaveLength(2);
     expect(md).toContain("no \\<quote\\>");
     expect(md).toContain("`review` is advisory");
-    expect(md).toContain("`neutral`");
-    expect(md).toContain(`require the check \`${CHECK_NAME}\``);
+    expect(md).toContain("stays neutral");
+    expect(md).toContain(`require <code>${CHECK_NAME}</code> in branch protection`);
   });
 });

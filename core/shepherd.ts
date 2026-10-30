@@ -4,7 +4,7 @@ import { DEFAULT_PROTECTED, type Config } from "./config.js";
 import type { Octokit, Repo } from "./github.js";
 import { escapeMd } from "./render.js";
 import { isMergeJudgeConfigPath } from "./rules.js";
-import { redact } from "../src/redact.js";
+import { redact } from "./redact.js";
 import { effectiveCap } from "./shepherdrules.js";
 
 /** Label that turns Shepherd on for a PR (adding) or off (removing). */
@@ -252,19 +252,94 @@ export function renderShepherdComment(state: ShepherdState, repoUrl: string): st
   return out.join("\n");
 }
 
+// ---------------- one state comment per PR, even after a race ----------------
+
+type CommentLite = { id: number; body?: string | null; user?: { type?: string; login?: string } | null };
+
+/** Shepherd's own state comments, oldest first. The oldest is the live one; later ones are leftovers of a create race. */
+export const ownStateComments = <T extends CommentLite>(comments: readonly T[], selfLogin?: string | null): T[] =>
+  comments.filter((c) => isOwnStateComment(c, selfLogin)).sort((a, b) => a.id - b.id);
+
+const grantKey = (g: ShepherdGrant) => (g.comment != null ? `c${g.comment}` : `${g.who}@${g.at}`);
+const entryKey = (e: ShepherdEntry) => JSON.stringify([e.at, e.kind, e.what, e.changed, e.result, e.commit, e.run]);
+
+/** `base` plus the retry grants of the other states, each grant once (by command comment id), so no grant is lost to a split state. */
+export function mergeGrants(base: ShepherdState, others: readonly ShepherdState[]): ShepherdState {
+  const log = [...base.grantLog];
+  const seen = new Set(log.map(grantKey));
+  let extra = 0;
+  for (const g of others.flatMap((o) => o.grantLog)) if (!seen.has(grantKey(g))) { seen.add(grantKey(g)); log.push(g); extra++; }
+  const grants = Math.max(base.grants + extra, ...others.map((o) => o.grants), log.length);
+  return extra || grants !== base.grants ? { ...base, grants, grantLog: log.slice(-MAX_ENTRIES) } : base;
+}
+
+/**
+ * Fold duplicate state comments into one state: grants and grant log (see mergeGrants) and log entries, each once, in time
+ * order. The status, on/off and attempt fields come from the state whose newest entry is the latest (later argument wins a tie).
+ */
+export function mergeStates(base: ShepherdState, others: readonly ShepherdState[]): ShepherdState {
+  const all = [base, ...others];
+  const seen = new Set<string>();
+  const entries = all.flatMap((x) => x.entries).filter((e) => !seen.has(entryKey(e)) && seen.add(entryKey(e))).sort((a, b) => a.at.localeCompare(b.at)).slice(-MAX_ENTRIES);
+  const newest = all.reduce((best, x) => ((x.entries.at(-1)?.at ?? "") >= (best.entries.at(-1)?.at ?? "") ? x : best), base);
+  return { ...mergeGrants(newest, all.filter((x) => x !== newest)), entries };
+}
+
+/** The state Shepherd reads for a PR: the oldest own state comment, with the grants of any duplicates added. Null when there is none. */
+export function readShepherdState(comments: readonly CommentLite[], selfLogin?: string | null): ShepherdState | null {
+  const [first, ...rest] = ownStateComments(comments, selfLogin);
+  const base = parseShepherdState(first?.body);
+  if (!base) return null;
+  return mergeGrants(base, rest.map((c) => parseShepherdState(c.body)).filter((x): x is ShepherdState => !!x));
+}
+
+export const SUPERSEDED_MARKER = "<!-- mergejudge:shepherd-superseded -->";
+
+/** Remove duplicate state comments (Shepherd's own): delete, else turn into a short pointer to the live one. */
+async function retire(ok: Octokit, r: Repo, pull: number, extras: readonly CommentLite[], liveId: number): Promise<void> {
+  const link = `https://github.com/${r.owner}/${r.repo}/pull/${pull}#issuecomment-${liveId}`;
+  for (const c of extras) {
+    try { await ok.rest.issues.deleteComment({ ...r, comment_id: c.id }); } catch (e) {
+      if ((e as { status?: number }).status === 404) continue;
+      await ok.rest.issues.updateComment({ ...r, comment_id: c.id, body: `${SUPERSEDED_MARKER}\nSuperseded by ${link}.` }).catch(() => undefined);
+    }
+  }
+}
+
 /**
  * Create or update the one Shepherd log comment of a PR. `next` is the new state, or a function of the previous one
  * (null when there is no comment yet) so a caller reads and writes with a single listing. Only bot comments are matched,
  * like the sticky summary comment.
+ *
+ * The OLDEST own state comment is always the live one. Existing duplicates are folded into it and removed. After a create the
+ * comments are listed again: if another run created one first (a concurrency group keeps only one pending run, but two runs
+ * can still overlap), this run's state is merged into the older comment and the newer one is removed, so the log never splits.
  */
 export async function upsertShepherdComment(
   ok: Octokit, r: Repo, pull: number, next: ShepherdState | ((prev: ShepherdState | null) => ShepherdState), selfLogin?: string | null,
 ): Promise<ShepherdState> {
-  const comments = await ok.paginate(ok.rest.issues.listComments, { ...r, issue_number: pull, per_page: 100 });
-  const existing = comments.find((c) => isOwnStateComment(c, selfLogin));
-  const state = typeof next === "function" ? next(parseShepherdState(existing?.body)) : next;
-  const body = renderShepherdComment(state, `https://github.com/${r.owner}/${r.repo}`);
-  if (existing) await ok.rest.issues.updateComment({ ...r, comment_id: existing.id, body });
-  else await ok.rest.issues.createComment({ ...r, issue_number: pull, body });
-  return state;
+  const url = `https://github.com/${r.owner}/${r.repo}`;
+  const list = () => ok.paginate(ok.rest.issues.listComments, { ...r, issue_number: pull, per_page: 100 });
+  const parsed = (cs: readonly CommentLite[]) => cs.map((c) => parseShepherdState(c.body)).filter((x): x is ShepherdState => !!x);
+  const own = ownStateComments(await list(), selfLogin);
+  const existing = own[0];
+  const prev = parseShepherdState(existing?.body);
+  const folded = prev ? mergeStates(prev, parsed(own.slice(1))) : prev;
+  const state = typeof next === "function" ? next(folded) : next;
+  if (existing) {
+    await ok.rest.issues.updateComment({ ...r, comment_id: existing.id, body: renderShepherdComment(state, url) });
+    await retire(ok, r, pull, own.slice(1), existing.id);
+    return state;
+  }
+  const created = await ok.rest.issues.createComment({ ...r, issue_number: pull, body: renderShepherdComment(state, url) });
+  const myId = (created as { data?: { id?: number } } | undefined)?.data?.id;
+  if (myId == null) return state;
+  const after = ownStateComments(await list(), selfLogin);
+  const winner = after[0];
+  if (!winner || (winner.id === myId && after.length < 2)) return state;
+  const others = after.slice(1);
+  const merged = mergeStates(parseShepherdState(winner.body) ?? state, [...parsed(others.filter((c) => c.id !== myId)), ...(winner.id === myId ? [] : [state])]);
+  await ok.rest.issues.updateComment({ ...r, comment_id: winner.id, body: renderShepherdComment(merged, url) });
+  await retire(ok, r, pull, others, winner.id);
+  return merged;
 }

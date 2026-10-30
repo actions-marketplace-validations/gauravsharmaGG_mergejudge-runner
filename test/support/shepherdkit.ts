@@ -63,7 +63,7 @@ export function makeRepo(files: Record<string, string> = { "src/a.ts": "export c
 export interface FakeJob { id: number; name: string; conclusion: string | null; log: string }
 export interface GhState {
   labels: Set<string>;
-  comments: { id: number; body: string; user: { type: string; login: string } }[];
+  comments: { id: number; issue?: number; body: string; user: { type: string; login: string } }[];
   /** Commit list for pulls.listCommits; default: git log of the bare repo's branch (oldest first). */
   commits?: () => { sha: string; commit: { message: string } }[];
   jobs: FakeJob[];
@@ -87,6 +87,10 @@ export interface GhState {
   calls: string[];
   reruns: number[];
   headCommit?: { message: string; files: string[] };
+  /** Completed workflow runs of the repo (listWorkflowRunsForRepo). */
+  runs?: { id: number; name: string; path?: string; workflow_id?: number; conclusion: string | null; status?: string; head_sha: string; run_attempt?: number }[];
+  /** Called right after a comment is created (a test can slip a rival's comment in here to simulate a race). */
+  onCreate?: (id: number) => void;
 }
 
 export function fakeGh(repo: Repo3, over: Partial<GhState> = {}) {
@@ -116,8 +120,15 @@ export function fakeGh(repo: Repo3, over: Partial<GhState> = {}) {
         if (!st.labels.delete(p.name)) throw Object.assign(new Error("not found"), { status: 404 });
         return { data: [] };
       },
-      listComments: async () => ({ data: st.comments }),
-      createComment: async (p: { body: string }) => { log("createComment"); st.comments.push({ id: nextId++, body: p.body, user: { type: "Bot", login: "mj[bot]" } }); return { data: {} }; },
+      listComments: async (p?: { issue_number?: number }) => ({ data: st.comments.filter((c) => c.issue == null || p?.issue_number == null || c.issue === p.issue_number) }),
+      createComment: async (p: { body: string; issue_number?: number }) => {
+        log("createComment");
+        const id = nextId++;
+        st.comments.push({ id, issue: p.issue_number, body: p.body, user: { type: "Bot", login: "mj[bot]" } });
+        st.onCreate?.(id);
+        return { data: { id } };
+      },
+      deleteComment: async (p: { comment_id: number }) => { log("deleteComment"); st.comments = st.comments.filter((c) => c.id !== p.comment_id); return { data: {} }; },
       updateComment: async (p: { comment_id: number; body: string }) => { log("updateComment"); st.comments.find((c) => c.id === p.comment_id)!.body = p.body; return { data: {} }; },
     },
     repos: {
@@ -141,13 +152,14 @@ export function fakeGh(repo: Repo3, over: Partial<GhState> = {}) {
         return { data: { jobs: st.jobs.map(({ log: _l, ...j }) => j) } };
       },
       downloadJobLogsForWorkflowRun: async (p: { job_id: number }) => ({ data: st.jobs.find((j) => j.id === p.job_id)?.log ?? "" }),
+      listWorkflowRunsForRepo: async (p: { head_sha?: string }) => { log("listRuns"); return { data: { workflow_runs: (st.runs ?? []).filter((r) => !p.head_sha || r.head_sha === p.head_sha) } }; },
       reRunWorkflowFailedJobs: async (p: { run_id: number }) => { log("rerun"); st.reruns.push(p.run_id); return { data: {} }; },
     },
   };
   const paginate = async (fn: (p: unknown) => Promise<{ data: unknown }>, params: unknown) => {
     const d = (await fn(params)).data as Record<string, unknown> | unknown[];
     if (Array.isArray(d)) return d;
-    return (d.jobs ?? d.check_runs ?? []) as unknown[];
+    return (d.jobs ?? d.check_runs ?? d.workflow_runs ?? []) as unknown[];
   };
   const ok = { rest, paginate } as unknown as ShepherdCtx["ok"];
   return { ok, st, pull };

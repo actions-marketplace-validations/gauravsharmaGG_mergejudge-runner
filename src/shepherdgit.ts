@@ -9,6 +9,8 @@ const g = async (cwd: string, args: string[], input?: string) => (await runGit(a
 const idArgs = (id: Identity) => ["-c", `user.name=${id.name}`, "-c", `user.email=${id.email}`, "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false"];
 
 export const headSha = (cwd: string) => g(cwd, ["rev-parse", "HEAD"]);
+/** The commit a ref points to (full sha), or undefined when it does not resolve. */
+export const refSha = async (cwd: string, ref: string): Promise<string | undefined> => (await runGit(["rev-parse", "--verify", "-q", `${ref}^{commit}`], { cwd, allowFail: true })).stdout.trim() || undefined;
 
 /** Fetch and check out the PR head branch; false when the branch tip is no longer `expectSha` (it moved). Nothing is changed in that case beyond the checkout. */
 export async function checkoutHead(cwd: string, headRef: string, expectSha: string): Promise<boolean> {

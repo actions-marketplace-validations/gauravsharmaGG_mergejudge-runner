@@ -1,0 +1,7 @@
+{
+  "title": "PR <story> & \"quotes\"",
+  "steps": [
+    {"id":"s1","title":"</text><script>alert(1)</script> very long title that should wrap nicely onto a second line and then get cut","sub":"a&b <c> 'd' \"e\"","change":"changed","before":"<img src=x onerror=alert(1)> & a really long before text that keeps going and going","after":"]]> --> & done"},
+    {"id":"s2","title":"Plain\u0007 control chars","change":"weird"}
+  ]
+}

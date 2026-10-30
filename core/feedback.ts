@@ -15,14 +15,16 @@ export const FEEDBACK_LABELS: { kind: FeedbackKind; label: string }[] = [
 
 /** Render the feedback checkbox block appended to the sticky comment. */
 export function renderFeedback(rubric: RubricResult[] = []): string {
-  const out: string[] = [FEEDBACK_MARKER, "### Feedback for MergeJudge", ""];
+  const out: string[] = [FEEDBACK_MARKER, "**Was this review right?**", ""];
   for (const f of FEEDBACK_LABELS) out.push(`- [ ] ${f.label}`);
   const scored = rubric.filter((r) => r.verdict === "fail" || r.verdict === "unverified" || (r.score !== undefined && r.score <= 2));
   if (scored.length) {
-    out.push("", "#### Rubric feedback (tick what you checked: wrong = a false alarm, right = a real problem)", "");
+    // Task-list boxes inside <details> stay clickable on GitHub; the parser reads them line by line, so position does not matter.
+    out.push("", "<details><summary>Rate each flagged check</summary>", "", "Tick **wrong** if the check was a false alarm, **right** if it found a real problem.", "");
     for (const r of scored) out.push(`- [ ] ${escapeMd(r.id)}: wrong`, `- [ ] ${escapeMd(r.id)}: right`);
+    out.push("", "</details>");
   }
-  out.push("", "<sub>Tick a box (or comment <code>/mergejudge learn &lt;note&gt;</code>) — feedback is stored on the <code>mergejudge-learning</code> branch, never in this PR.</sub>");
+  out.push("", "<sub>Tick a box or comment <code>/mergejudge learn &lt;note&gt;</code>. Feedback is stored on the <code>mergejudge-learning</code> branch, never in this PR.</sub>");
   return out.join("\n");
 }
 

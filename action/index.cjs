@@ -587,10 +587,10 @@ var require_errors = __commonJS({
     };
     var kHTTPParserError = /* @__PURE__ */ Symbol.for("undici.error.UND_ERR_HTTP_PARSER");
     var HTTPParserError = class extends Error {
-      constructor(message, code2, data) {
+      constructor(message, code3, data) {
         super(message);
         this.name = "HTTPParserError";
-        this.code = code2 ? `HPE_${code2}` : void 0;
+        this.code = code3 ? `HPE_${code3}` : void 0;
         this.data = data ? data.toString() : void 0;
       }
       static [Symbol.hasInstance](instance) {
@@ -613,12 +613,12 @@ var require_errors = __commonJS({
     };
     var kRequestRetryError = /* @__PURE__ */ Symbol.for("undici.error.UND_ERR_REQ_RETRY");
     var RequestRetryError = class extends UndiciError {
-      constructor(message, code2, { headers, data }) {
+      constructor(message, code3, { headers, data }) {
         super(message);
         this.name = "RequestRetryError";
         this.message = message || "Request retry error";
         this.code = "UND_ERR_REQ_RETRY";
-        this.statusCode = code2;
+        this.statusCode = code3;
         this.data = data;
         this.headers = headers;
       }
@@ -629,12 +629,12 @@ var require_errors = __commonJS({
     };
     var kResponseError = /* @__PURE__ */ Symbol.for("undici.error.UND_ERR_RESPONSE");
     var ResponseError = class extends UndiciError {
-      constructor(message, code2, { headers, data }) {
+      constructor(message, code3, { headers, data }) {
         super(message);
         this.name = "ResponseError";
         this.message = message || "Response error";
         this.code = "UND_ERR_RESPONSE";
-        this.statusCode = code2;
+        this.statusCode = code3;
         this.data = data;
         this.headers = headers;
       }
@@ -844,8 +844,8 @@ var require_tree = __commonJS({
         if (index === void 0 || index >= key.length) {
           throw new TypeError("Unreachable");
         }
-        const code2 = this.code = key.charCodeAt(index);
-        if (code2 > 127) {
+        const code3 = this.code = key.charCodeAt(index);
+        if (code3 > 127) {
           throw new TypeError("key must be ascii string");
         }
         if (key.length !== ++index) {
@@ -866,11 +866,11 @@ var require_tree = __commonJS({
         let index = 0;
         let node2 = this;
         while (true) {
-          const code2 = key.charCodeAt(index);
-          if (code2 > 127) {
+          const code3 = key.charCodeAt(index);
+          if (code3 > 127) {
             throw new TypeError("key must be ascii string");
           }
-          if (node2.code === code2) {
+          if (node2.code === code3) {
             if (length === ++index) {
               node2.value = value;
               break;
@@ -880,7 +880,7 @@ var require_tree = __commonJS({
               node2.middle = new _TstNode(key, value, index);
               break;
             }
-          } else if (node2.code < code2) {
+          } else if (node2.code < code3) {
             if (node2.left !== null) {
               node2 = node2.left;
             } else {
@@ -904,19 +904,19 @@ var require_tree = __commonJS({
         let index = 0;
         let node2 = this;
         while (node2 !== null && index < keylength) {
-          let code2 = key[index];
-          if (code2 <= 90 && code2 >= 65) {
-            code2 |= 32;
+          let code3 = key[index];
+          if (code3 <= 90 && code3 >= 65) {
+            code3 |= 32;
           }
           while (node2 !== null) {
-            if (code2 === node2.code) {
+            if (code3 === node2.code) {
               if (keylength === ++index) {
                 return node2;
               }
               node2 = node2.middle;
               break;
             }
-            node2 = node2.code < code2 ? node2.left : node2.right;
+            node2 = node2.code < code3 ? node2.left : node2.right;
           }
         }
         return null;
@@ -1623,11 +1623,11 @@ var require_diagnostics = __commonJS({
         websocketDebuglog("connection opened %s%s", address, port ? `:${port}` : "");
       });
       diagnosticsChannel.channel("undici:websocket:close").subscribe((evt) => {
-        const { websocket, code: code2, reason } = evt;
+        const { websocket, code: code3, reason } = evt;
         websocketDebuglog(
           "closed connection to %s - %s %s",
           websocket.url,
-          code2,
+          code3,
           reason
         );
       });
@@ -3666,8 +3666,8 @@ var require_webidl = __commonJS({
       return new TypeError(`${message.header}: ${message.message}`);
     };
     webidl.errors.conversionFailed = function(context3) {
-      const plural2 = context3.types.length === 1 ? "" : " one of";
-      const message = `${context3.argument} could not be converted to${plural2}: ${context3.types.join(", ")}.`;
+      const plural3 = context3.types.length === 1 ? "" : " one of";
+      const message = `${context3.argument} could not be converted to${plural3}: ${context3.types.join(", ")}.`;
       return webidl.errors.exception({
         header: context3.prefix,
         message
@@ -4115,9 +4115,9 @@ var require_util2 = __commonJS({
     }
     function isValidEncodedURL(url2) {
       for (let i = 0; i < url2.length; ++i) {
-        const code2 = url2.charCodeAt(i);
-        if (code2 > 126 || // Non-US-ASCII + DEL
-        code2 < 32) {
+        const code3 = url2.charCodeAt(i);
+        if (code3 > 126 || // Non-US-ASCII + DEL
+        code3 < 32) {
           return false;
         }
       }
@@ -4708,8 +4708,8 @@ var require_util2 = __commonJS({
       }
       const rangeStart = collectASequenceOfCodePoints(
         (char) => {
-          const code2 = char.charCodeAt(0);
-          return code2 >= 48 && code2 <= 57;
+          const code3 = char.charCodeAt(0);
+          return code3 >= 48 && code3 <= 57;
         },
         data,
         position
@@ -4735,8 +4735,8 @@ var require_util2 = __commonJS({
       }
       const rangeEnd = collectASequenceOfCodePoints(
         (char) => {
-          const code2 = char.charCodeAt(0);
-          return code2 >= 48 && code2 <= 57;
+          const code3 = char.charCodeAt(0);
+          return code3 >= 48 && code3 <= 57;
         },
         data,
         position
@@ -7027,9 +7027,9 @@ var require_client_h2 = __commonJS({
       this[kSocket][kError] = err;
       this[kClient][kOnError](err);
     }
-    function onHttp2FrameError(type, code2, id) {
+    function onHttp2FrameError(type, code3, id) {
       if (id === 0) {
-        const err = new InformationalError(`HTTP/2: "frameError" received - type ${type}, code ${code2}`);
+        const err = new InformationalError(`HTTP/2: "frameError" received - type ${type}, code ${code3}`);
         this[kSocket][kError] = err;
         this[kClient][kOnError](err);
       }
@@ -7039,8 +7039,8 @@ var require_client_h2 = __commonJS({
       this.destroy(err);
       util.destroy(this[kSocket], err);
     }
-    function onHTTP2GoAway(code2) {
-      const err = this[kError] || new SocketError(`HTTP/2: "GOAWAY" frame received with code ${code2}`, util.getSocketInfo(this));
+    function onHTTP2GoAway(code3) {
+      const err = this[kError] || new SocketError(`HTTP/2: "GOAWAY" frame received with code ${code3}`, util.getSocketInfo(this));
       const client = this[kClient];
       client[kSocket] = null;
       client[kHTTPContext] = null;
@@ -7245,8 +7245,8 @@ var require_client_h2 = __commonJS({
       stream.once("error", function(err) {
         abort(err);
       });
-      stream.once("frameError", (type, code2) => {
-        abort(new InformationalError(`HTTP/2: "frameError" received - type ${type}, code ${code2}`));
+      stream.once("frameError", (type, code3) => {
+        abort(new InformationalError(`HTTP/2: "frameError" received - type ${type}, code ${code3}`));
       });
       return true;
       function writeBodyH2() {
@@ -9184,7 +9184,7 @@ var require_retry_handler = __commonJS({
         if (this.handler.onBodySent) return this.handler.onBodySent(chunk);
       }
       static [kRetryHandlerDefaultRetry](err, { state, opts }, cb) {
-        const { statusCode, code: code2, headers } = err;
+        const { statusCode, code: code3, headers } = err;
         const { method, retryOptions } = opts;
         const {
           maxRetries,
@@ -9196,7 +9196,7 @@ var require_retry_handler = __commonJS({
           methods
         } = retryOptions;
         const { counter } = state;
-        if (code2 && code2 !== "UND_ERR_REQ_RETRY" && !errorCodes.includes(code2)) {
+        if (code3 && code3 !== "UND_ERR_REQ_RETRY" && !errorCodes.includes(code3)) {
           cb(err);
           return;
         }
@@ -11230,9 +11230,9 @@ var require_pluralizer = __commonJS({
       this: "these"
     };
     module2.exports = class Pluralizer {
-      constructor(singular, plural2) {
+      constructor(singular, plural3) {
         this.singular = singular;
-        this.plural = plural2;
+        this.plural = plural3;
       }
       pluralize(count) {
         const one = count === 1;
@@ -11939,8 +11939,8 @@ var require_headers = __commonJS({
     var util = require("node:util");
     var kHeadersMap = /* @__PURE__ */ Symbol("headers map");
     var kHeadersSortedMap = /* @__PURE__ */ Symbol("headers map sorted");
-    function isHTTPWhiteSpaceCharCode(code2) {
-      return code2 === 10 || code2 === 13 || code2 === 9 || code2 === 32;
+    function isHTTPWhiteSpaceCharCode(code3) {
+      return code3 === 10 || code3 === 13 || code3 === 9 || code3 === 32;
     }
     function headerValueNormalize(potentialValue) {
       let i = 0;
@@ -16095,8 +16095,8 @@ var require_util6 = __commonJS({
     "use strict";
     function isCTLExcludingHtab(value) {
       for (let i = 0; i < value.length; ++i) {
-        const code2 = value.charCodeAt(i);
-        if (code2 >= 0 && code2 <= 8 || code2 >= 10 && code2 <= 31 || code2 === 127) {
+        const code3 = value.charCodeAt(i);
+        if (code3 >= 0 && code3 <= 8 || code3 >= 10 && code3 <= 31 || code3 === 127) {
           return true;
         }
       }
@@ -16104,26 +16104,26 @@ var require_util6 = __commonJS({
     }
     function validateCookieName(name) {
       for (let i = 0; i < name.length; ++i) {
-        const code2 = name.charCodeAt(i);
-        if (code2 < 33 || // exclude CTLs (0-31), SP and HT
-        code2 > 126 || // exclude non-ascii and DEL
-        code2 === 34 || // "
-        code2 === 40 || // (
-        code2 === 41 || // )
-        code2 === 60 || // <
-        code2 === 62 || // >
-        code2 === 64 || // @
-        code2 === 44 || // ,
-        code2 === 59 || // ;
-        code2 === 58 || // :
-        code2 === 92 || // \
-        code2 === 47 || // /
-        code2 === 91 || // [
-        code2 === 93 || // ]
-        code2 === 63 || // ?
-        code2 === 61 || // =
-        code2 === 123 || // {
-        code2 === 125) {
+        const code3 = name.charCodeAt(i);
+        if (code3 < 33 || // exclude CTLs (0-31), SP and HT
+        code3 > 126 || // exclude non-ascii and DEL
+        code3 === 34 || // "
+        code3 === 40 || // (
+        code3 === 41 || // )
+        code3 === 60 || // <
+        code3 === 62 || // >
+        code3 === 64 || // @
+        code3 === 44 || // ,
+        code3 === 59 || // ;
+        code3 === 58 || // :
+        code3 === 92 || // \
+        code3 === 47 || // /
+        code3 === 91 || // [
+        code3 === 93 || // ]
+        code3 === 63 || // ?
+        code3 === 61 || // =
+        code3 === 123 || // {
+        code3 === 125) {
           throw new Error("Invalid cookie name");
         }
       }
@@ -16139,31 +16139,31 @@ var require_util6 = __commonJS({
         ++i;
       }
       while (i < len) {
-        const code2 = value.charCodeAt(i++);
-        if (code2 < 33 || // exclude CTLs (0-31)
-        code2 > 126 || // non-ascii and DEL (127)
-        code2 === 34 || // "
-        code2 === 44 || // ,
-        code2 === 59 || // ;
-        code2 === 92) {
+        const code3 = value.charCodeAt(i++);
+        if (code3 < 33 || // exclude CTLs (0-31)
+        code3 > 126 || // non-ascii and DEL (127)
+        code3 === 34 || // "
+        code3 === 44 || // ,
+        code3 === 59 || // ;
+        code3 === 92) {
           throw new Error("Invalid cookie value");
         }
       }
     }
     function validateCookiePath(path2) {
       for (let i = 0; i < path2.length; ++i) {
-        const code2 = path2.charCodeAt(i);
-        if (code2 < 32 || // exclude CTLs (0-31)
-        code2 > 126 || // exclude DEL and non-ascii
-        code2 === 59) {
+        const code3 = path2.charCodeAt(i);
+        if (code3 < 32 || // exclude CTLs (0-31)
+        code3 > 126 || // exclude DEL and non-ascii
+        code3 === 59) {
           throw new Error("Invalid cookie path");
         }
       }
     }
-    function isLetterOrDigit(code2) {
-      return code2 >= 48 && code2 <= 57 || // 0-9
-      code2 >= 65 && code2 <= 90 || // A-Z
-      code2 >= 97 && code2 <= 122;
+    function isLetterOrDigit(code3) {
+      return code3 >= 48 && code3 <= 57 || // 0-9
+      code3 >= 65 && code3 <= 90 || // A-Z
+      code3 >= 97 && code3 <= 122;
     }
     function validateCookieDomain(domain2) {
       if (domain2 === " ") {
@@ -16174,8 +16174,8 @@ var require_util6 = __commonJS({
       }
       let labelLength = 0;
       for (let i = 0; i < domain2.length; ++i) {
-        const code2 = domain2.charCodeAt(i);
-        if (code2 === 46) {
+        const code3 = domain2.charCodeAt(i);
+        if (code3 === 46) {
           if (labelLength === 0) {
             throw new Error("Invalid cookie domain");
           }
@@ -16185,10 +16185,10 @@ var require_util6 = __commonJS({
           labelLength = 0;
           continue;
         }
-        if (labelLength === 0 && !isLetterOrDigit(code2)) {
+        if (labelLength === 0 && !isLetterOrDigit(code3)) {
           throw new Error("Invalid cookie domain");
         }
-        if (!isLetterOrDigit(code2) && code2 !== 45) {
+        if (!isLetterOrDigit(code3) && code3 !== 45) {
           throw new Error("Invalid cookie domain");
         }
         if (++labelLength > 63) {
@@ -16962,37 +16962,37 @@ var require_util7 = __commonJS({
         return false;
       }
       for (let i = 0; i < protocol.length; ++i) {
-        const code2 = protocol.charCodeAt(i);
-        if (code2 < 33 || // CTL, contains SP (0x20) and HT (0x09)
-        code2 > 126 || code2 === 34 || // "
-        code2 === 40 || // (
-        code2 === 41 || // )
-        code2 === 44 || // ,
-        code2 === 47 || // /
-        code2 === 58 || // :
-        code2 === 59 || // ;
-        code2 === 60 || // <
-        code2 === 61 || // =
-        code2 === 62 || // >
-        code2 === 63 || // ?
-        code2 === 64 || // @
-        code2 === 91 || // [
-        code2 === 92 || // \
-        code2 === 93 || // ]
-        code2 === 123 || // {
-        code2 === 125) {
+        const code3 = protocol.charCodeAt(i);
+        if (code3 < 33 || // CTL, contains SP (0x20) and HT (0x09)
+        code3 > 126 || code3 === 34 || // "
+        code3 === 40 || // (
+        code3 === 41 || // )
+        code3 === 44 || // ,
+        code3 === 47 || // /
+        code3 === 58 || // :
+        code3 === 59 || // ;
+        code3 === 60 || // <
+        code3 === 61 || // =
+        code3 === 62 || // >
+        code3 === 63 || // ?
+        code3 === 64 || // @
+        code3 === 91 || // [
+        code3 === 92 || // \
+        code3 === 93 || // ]
+        code3 === 123 || // {
+        code3 === 125) {
           return false;
         }
       }
       return true;
     }
-    function isValidStatusCode(code2) {
-      if (code2 >= 1e3 && code2 < 1015) {
-        return code2 !== 1004 && // reserved
-        code2 !== 1005 && // "MUST NOT be set as a status code"
-        code2 !== 1006;
+    function isValidStatusCode(code3) {
+      if (code3 >= 1e3 && code3 < 1015) {
+        return code3 !== 1004 && // reserved
+        code3 !== 1005 && // "MUST NOT be set as a status code"
+        code3 !== 1006;
       }
-      return code2 >= 3e3 && code2 <= 4999;
+      return code3 >= 3e3 && code3 <= 4999;
     }
     function failWebsocketConnection(ws, reason) {
       const { [kController]: controller, [kResponse]: response } = ws;
@@ -17261,7 +17261,7 @@ var require_connection = __commonJS({
       });
       return controller;
     }
-    function closeWebSocketConnection(ws, code2, reason, reasonByteLength) {
+    function closeWebSocketConnection(ws, code3, reason, reasonByteLength) {
       if (isClosing(ws) || isClosed(ws)) {
       } else if (!isEstablished(ws)) {
         failWebsocketConnection(ws, "Connection was closed before it was established.");
@@ -17269,12 +17269,12 @@ var require_connection = __commonJS({
       } else if (ws[kSentClose] === sentCloseFrameState.NOT_SENT) {
         ws[kSentClose] = sentCloseFrameState.PROCESSING;
         const frame = new WebsocketFrameSend();
-        if (code2 !== void 0 && reason === void 0) {
+        if (code3 !== void 0 && reason === void 0) {
           frame.frameData = Buffer.allocUnsafe(2);
-          frame.frameData.writeUInt16BE(code2, 0);
-        } else if (code2 !== void 0 && reason !== void 0) {
+          frame.frameData.writeUInt16BE(code3, 0);
+        } else if (code3 !== void 0 && reason !== void 0) {
           frame.frameData = Buffer.allocUnsafe(2 + reasonByteLength);
-          frame.frameData.writeUInt16BE(code2, 0);
+          frame.frameData.writeUInt16BE(code3, 0);
           frame.frameData.write(reason, 2, "utf-8");
         } else {
           frame.frameData = emptyBuffer;
@@ -17299,25 +17299,25 @@ var require_connection = __commonJS({
       response.socket.off("close", onSocketClose);
       response.socket.off("error", onSocketError);
       const wasClean = ws[kSentClose] === sentCloseFrameState.SENT && ws[kReceivedClose];
-      let code2 = 1005;
+      let code3 = 1005;
       let reason = "";
       const result = ws[kByteParser].closingInfo;
       if (result && !result.error) {
-        code2 = result.code ?? 1005;
+        code3 = result.code ?? 1005;
         reason = result.reason;
       } else if (!ws[kReceivedClose]) {
-        code2 = 1006;
+        code3 = 1006;
       }
       ws[kReadyState] = states.CLOSED;
       fireEvent("close", ws, (type, init) => new CloseEvent(type, init), {
         wasClean,
-        code: code2,
+        code: code3,
         reason
       });
       if (channels.close.hasSubscribers) {
         channels.close.publish({
           websocket: ws,
-          code: code2,
+          code: code3,
           reason
         });
       }
@@ -17442,8 +17442,8 @@ var require_receiver = __commonJS({
     var { closeWebSocketConnection } = require_connection();
     var { PerMessageDeflate } = require_permessage_deflate();
     var { MessageSizeExceededError } = require_errors();
-    function failWebsocketConnectionWithCode(ws, code2, reason) {
-      closeWebSocketConnection(ws, code2, reason, Buffer.byteLength(reason));
+    function failWebsocketConnectionWithCode(ws, code3, reason) {
+      closeWebSocketConnection(ws, code3, reason, Buffer.byteLength(reason));
       failWebsocketConnection(ws, reason);
     }
     var ByteParser = class extends Writable {
@@ -17630,8 +17630,8 @@ var require_receiver = __commonJS({
                   this.#info.fin,
                   (error63, data) => {
                     if (error63) {
-                      const code2 = error63 instanceof MessageSizeExceededError ? 1009 : 1007;
-                      failWebsocketConnectionWithCode(this.ws, code2, error63.message);
+                      const code3 = error63 instanceof MessageSizeExceededError ? 1009 : 1007;
+                      failWebsocketConnectionWithCode(this.ws, code3, error63.message);
                       return;
                     }
                     if (!this.writeFragments(data)) {
@@ -17717,11 +17717,11 @@ var require_receiver = __commonJS({
       }
       parseCloseBody(data) {
         assert2(data.length !== 1);
-        let code2;
+        let code3;
         if (data.length >= 2) {
-          code2 = data.readUInt16BE(0);
+          code3 = data.readUInt16BE(0);
         }
-        if (code2 !== void 0 && !isValidStatusCode(code2)) {
+        if (code3 !== void 0 && !isValidStatusCode(code3)) {
           return { code: 1002, reason: "Invalid status code", error: true };
         }
         let reason = data.subarray(2);
@@ -17733,7 +17733,7 @@ var require_receiver = __commonJS({
         } catch {
           return { code: 1007, reason: "Invalid UTF-8", error: true };
         }
-        return { code: code2, reason, error: false };
+        return { code: code3, reason, error: false };
       }
       /**
        * Parses control frames.
@@ -17748,8 +17748,8 @@ var require_receiver = __commonJS({
           }
           this.#info.closeInfo = this.parseCloseBody(body);
           if (this.#info.closeInfo.error) {
-            const { code: code2, reason } = this.#info.closeInfo;
-            closeWebSocketConnection(this.ws, code2, reason, reason.length);
+            const { code: code3, reason } = this.#info.closeInfo;
+            closeWebSocketConnection(this.ws, code3, reason, reason.length);
             failWebsocketConnection(this.ws, reason);
             return false;
           }
@@ -17987,17 +17987,17 @@ var require_websocket = __commonJS({
        * @param {number|undefined} code
        * @param {string|undefined} reason
        */
-      close(code2 = void 0, reason = void 0) {
+      close(code3 = void 0, reason = void 0) {
         webidl.brandCheck(this, _WebSocket);
         const prefix = "WebSocket.close";
-        if (code2 !== void 0) {
-          code2 = webidl.converters["unsigned short"](code2, prefix, "code", { clamp: true });
+        if (code3 !== void 0) {
+          code3 = webidl.converters["unsigned short"](code3, prefix, "code", { clamp: true });
         }
         if (reason !== void 0) {
           reason = webidl.converters.USVString(reason, prefix, "reason");
         }
-        if (code2 !== void 0) {
-          if (code2 !== 1e3 && (code2 < 3e3 || code2 > 4999)) {
+        if (code3 !== void 0) {
+          if (code3 !== 1e3 && (code3 < 3e3 || code3 > 4999)) {
             throw new DOMException("invalid code", "InvalidAccessError");
           }
         }
@@ -18011,7 +18011,7 @@ var require_websocket = __commonJS({
             );
           }
         }
-        closeWebSocketConnection(this, code2, reason, reasonByteLength);
+        closeWebSocketConnection(this, code3, reason, reasonByteLength);
       }
       /**
        * @see https://websockets.spec.whatwg.org/#dom-websocket-send
@@ -18257,15 +18257,15 @@ var require_websocket = __commonJS({
     }
     function onParserError(err) {
       let message;
-      let code2;
+      let code3;
       if (err instanceof CloseEvent) {
         message = err.reason;
-        code2 = err.code;
+        code3 = err.code;
       } else {
         message = err.message;
       }
       fireEvent("error", this, () => new ErrorEvent("error", { error: err, message }));
-      closeWebSocketConnection(this, code2);
+      closeWebSocketConnection(this, code3);
     }
     module2.exports = {
       WebSocket
@@ -21066,8 +21066,8 @@ var require_stringifyString = __commonJS({
             case "u":
               {
                 str2 += json2.slice(start, i);
-                const code2 = json2.substr(i + 2, 4);
-                switch (code2) {
+                const code3 = json2.substr(i + 2, 4);
+                switch (code3) {
                   case "0000":
                     str2 += "\\0";
                     break;
@@ -21093,8 +21093,8 @@ var require_stringifyString = __commonJS({
                     str2 += "\\P";
                     break;
                   default:
-                    if (code2.substr(0, 2) === "00")
-                      str2 += "\\x" + code2.substr(2);
+                    if (code3.substr(0, 2) === "00")
+                      str2 += "\\x" + code3.substr(2);
                     else
                       str2 += json2.substr(i, 6);
                 }
@@ -23593,22 +23593,22 @@ var require_errors2 = __commonJS({
   "node_modules/yaml/dist/errors.js"(exports2) {
     "use strict";
     var YAMLError = class extends Error {
-      constructor(name, pos, code2, message) {
+      constructor(name, pos, code3, message) {
         super();
         this.name = name;
-        this.code = code2;
+        this.code = code3;
         this.message = message;
         this.pos = pos;
       }
     };
     var YAMLParseError = class extends YAMLError {
-      constructor(pos, code2, message) {
-        super("YAMLParseError", pos, code2, message);
+      constructor(pos, code3, message) {
+        super("YAMLParseError", pos, code3, message);
       }
     };
     var YAMLWarning = class extends YAMLError {
-      constructor(pos, code2, message) {
-        super("YAMLWarning", pos, code2, message);
+      constructor(pos, code3, message) {
+        super("YAMLWarning", pos, code3, message);
       }
     };
     var prettifyError2 = (src, lc) => (error63) => {
@@ -24517,7 +24517,7 @@ var require_resolve_flow_scalar = __commonJS({
       const { offset, type, source, end } = scalar;
       let _type;
       let value;
-      const _onError = (rel, code2, msg) => onError(offset + rel, code2, msg);
+      const _onError = (rel, code3, msg) => onError(offset + rel, code3, msg);
       switch (type) {
         case "scalar":
           _type = Scalar.Scalar.PLAIN;
@@ -24715,9 +24715,9 @@ var require_resolve_flow_scalar = __commonJS({
     function parseCharCode(source, offset, length, onError) {
       const cc = source.substr(offset, length);
       const ok = cc.length === length && /^[0-9a-fA-F]+$/.test(cc);
-      const code2 = ok ? parseInt(cc, 16) : NaN;
+      const code3 = ok ? parseInt(cc, 16) : NaN;
       try {
-        return String.fromCodePoint(code2);
+        return String.fromCodePoint(code3);
       } catch {
         const raw = source.substr(offset - 2, length + 2);
         onError(offset - 2, "BAD_DQ_ESCAPE", `Invalid escape sequence ${raw}`);
@@ -25039,12 +25039,12 @@ var require_composer = __commonJS({
         this.prelude = [];
         this.errors = [];
         this.warnings = [];
-        this.onError = (source, code2, message, warning2) => {
+        this.onError = (source, code3, message, warning2) => {
           const pos = getErrorPos(source);
           if (warning2)
-            this.warnings.push(new errors.YAMLWarning(pos, code2, message));
+            this.warnings.push(new errors.YAMLWarning(pos, code3, message));
           else
-            this.errors.push(new errors.YAMLParseError(pos, code2, message));
+            this.errors.push(new errors.YAMLParseError(pos, code3, message));
         };
         this.directives = new directives.Directives({ version: options.version || "1.2" });
         this.options = options;
@@ -25206,12 +25206,12 @@ var require_cst_scalar = __commonJS({
     var stringifyString = require_stringifyString();
     function resolveAsScalar(token, strict = true, onError) {
       if (token) {
-        const _onError = (pos, code2, message) => {
+        const _onError = (pos, code3, message) => {
           const offset = typeof pos === "number" ? pos : Array.isArray(pos) ? pos[0] : pos.offset;
           if (onError)
-            onError(offset, code2, message);
+            onError(offset, code3, message);
           else
-            throw new errors.YAMLParseError([offset, offset + 1], code2, message);
+            throw new errors.YAMLParseError([offset, offset + 1], code3, message);
         };
         switch (token.type) {
           case "scalar":
@@ -27561,9 +27561,9 @@ var Summary = class {
    *
    * @returns {Summary} summary instance
    */
-  addCodeBlock(code2, lang) {
+  addCodeBlock(code3, lang) {
     const attrs2 = Object.assign({}, lang && { lang });
-    const element = this.wrap("pre", this.wrap("code", code2), attrs2);
+    const element = this.wrap("pre", this.wrap("code", code3), attrs2);
     return this.addRaw(element).addEOL();
   }
   /**
@@ -28318,20 +28318,20 @@ CHAR_MAP[HTAB] |= OWS;
 CHAR_MAP[SP] |= OWS;
 CHAR_MAP[SEMI] |= SEMI_FLAG;
 CHAR_MAP[COMMA] |= COMMA_FLAG;
-for (let code2 = 128; code2 <= 255; code2++) {
-  CHAR_MAP[code2] |= LOWER_CASE;
+for (let code3 = 128; code3 <= 255; code3++) {
+  CHAR_MAP[code3] |= LOWER_CASE;
 }
 for (const char of "!#$%&'*+-.^_`|~") {
   CHAR_MAP[char.charCodeAt(0)] |= TOKEN_FLAG;
 }
-for (let code2 = 48; code2 <= 57; code2++) {
-  CHAR_MAP[code2] |= TOKEN_FLAG;
+for (let code3 = 48; code3 <= 57; code3++) {
+  CHAR_MAP[code3] |= TOKEN_FLAG;
 }
-for (let code2 = 65; code2 <= 90; code2++) {
-  CHAR_MAP[code2] |= LOWER_CASE | TOKEN_FLAG;
+for (let code3 = 65; code3 <= 90; code3++) {
+  CHAR_MAP[code3] |= LOWER_CASE | TOKEN_FLAG;
 }
-for (let code2 = 97; code2 <= 122; code2++) {
-  CHAR_MAP[code2] |= TOKEN_FLAG;
+for (let code3 = 97; code3 <= 122; code3++) {
+  CHAR_MAP[code3] |= TOKEN_FLAG;
 }
 var NullObject = /* @__PURE__ */ (() => {
   const C = function() {
@@ -28351,8 +28351,8 @@ function parse2(header, options) {
   let whitespace = -1;
   let stop = options?.parameters === false ? COMMA_FLAG : 0;
   while (index < len) {
-    const code2 = header.charCodeAt(index);
-    const flags = CHAR_MAP[code2];
+    const code3 = header.charCodeAt(index);
+    const flags = CHAR_MAP[code3];
     if ((flags & stopFlags) !== 0) {
       stop |= flags & COMMA_FLAG;
       break;
@@ -28363,7 +28363,7 @@ function parse2(header, options) {
     } else {
       whitespace = -1;
     }
-    typeFlags |= code2 & NON_ASCII | flags;
+    typeFlags |= code3 & NON_ASCII | flags;
     index++;
   }
   const valueEnd = whitespace === -1 ? index : whitespace;
@@ -28385,14 +28385,14 @@ function parseParameters(header, type, index, len, stopFlags) {
     let keyFlags = 0;
     let keyWhitespace = -1;
     while (index < len) {
-      const code2 = header.charCodeAt(index);
-      const flags = CHAR_MAP[code2];
+      const code3 = header.charCodeAt(index);
+      const flags = CHAR_MAP[code3];
       if ((flags & stopFlags) !== 0) {
         if ((flags & COMMA_FLAG) !== 0)
           break parameter;
         continue parameter;
       }
-      if (code2 === EQ) {
+      if (code3 === EQ) {
         const keyEnd = keyWhitespace === -1 ? index : keyWhitespace;
         const value = header.slice(keyStart, keyEnd);
         const key = (keyFlags & CASE_FLAGS) === 0 ? value : value.toLowerCase();
@@ -28404,16 +28404,16 @@ function parseParameters(header, type, index, len, stopFlags) {
           const quotedStart = ++index;
           let escaped = false;
           while (index < len) {
-            const code3 = header.charCodeAt(index);
-            if (code3 === DQUOTE) {
+            const code4 = header.charCodeAt(index);
+            if (code4 === DQUOTE) {
               if (parameters[key] === void 0) {
                 parameters[key] = escaped ? unescapeQuotedPairs(header, quotedStart, index) : header.slice(quotedStart, index);
               }
               index++;
               let stop2 = 0;
               while (index < len) {
-                const code4 = header.charCodeAt(index);
-                const flags2 = CHAR_MAP[code4];
+                const code5 = header.charCodeAt(index);
+                const flags2 = CHAR_MAP[code5];
                 if ((flags2 & stopFlags) !== 0) {
                   stop2 = flags2 & COMMA_FLAG;
                   break;
@@ -28424,7 +28424,7 @@ function parseParameters(header, type, index, len, stopFlags) {
                 break parameter;
               continue parameter;
             }
-            if (code3 === BSLASH && index + 1 < len) {
+            if (code4 === BSLASH && index + 1 < len) {
               escaped = true;
               index += 2;
               continue;
@@ -28437,8 +28437,8 @@ function parseParameters(header, type, index, len, stopFlags) {
         let stop = 0;
         let valueWhitespace = -1;
         while (index < len) {
-          const code3 = header.charCodeAt(index);
-          const flags2 = CHAR_MAP[code3];
+          const code4 = header.charCodeAt(index);
+          const flags2 = CHAR_MAP[code4];
           if ((flags2 & stopFlags) !== 0) {
             stop = flags2 & COMMA_FLAG;
             break;
@@ -28465,7 +28465,7 @@ function parseParameters(header, type, index, len, stopFlags) {
       } else {
         keyWhitespace = -1;
       }
-      keyFlags |= code2 & NON_ASCII | flags;
+      keyFlags |= code3 & NON_ASCII | flags;
       index++;
     }
   }
@@ -35088,12 +35088,12 @@ function isIso7064Mod97(iban3) {
   let remainder = 0;
   const len = iban3.length;
   for (let i = 4; i < len; i++) {
-    const code2 = iban3.charCodeAt(i);
-    remainder = (code2 >= 65 ? remainder * 100 + (code2 - 55) : remainder * 10 + (code2 - 48)) % 97;
+    const code3 = iban3.charCodeAt(i);
+    remainder = (code3 >= 65 ? remainder * 100 + (code3 - 55) : remainder * 10 + (code3 - 48)) % 97;
   }
   for (let i = 0; i < 4; i++) {
-    const code2 = iban3.charCodeAt(i);
-    remainder = (code2 >= 65 ? remainder * 100 + (code2 - 55) : remainder * 10 + (code2 - 48)) % 97;
+    const code3 = iban3.charCodeAt(i);
+    remainder = (code3 >= 65 ? remainder * 100 + (code3 - 55) : remainder * 10 + (code3 - 48)) % 97;
   }
   return remainder === 1;
 }
@@ -35350,11 +35350,11 @@ function capSize(inst, size) {
   const caps = sizeCaps(inst._zod.def.checks);
   if (!caps.length)
     return;
-  const cap = Math.min(...caps.map((c) => c[0]));
+  const cap2 = Math.min(...caps.map((c) => c[0]));
   const parse8 = inst._zod.parse;
   inst._zod.parse = (payload, ctx) => {
     const n = size(payload.value);
-    if (n > cap && !ctx?.skipChecks && ctx?.direction !== "backward") {
+    if (n > cap2 && !ctx?.skipChecks && ctx?.direction !== "backward") {
       for (const [max, ch] of sizeCaps(inst._zod.def.checks)) {
         if (n > max && ch._zod.def.when(payload)) {
           const start = payload.issues.length;
@@ -42698,8 +42698,8 @@ var error44 = () => {
       case "not_multiple_of":
         return `N\xFAmero inv\xE1lido: deve ser m\xFAltiplo de ${issue3.divisor}`;
       case "unrecognized_keys": {
-        const plural2 = issue3.keys.length > 1 ? "s" : "";
-        return `Chave${plural2} inv\xE1lida${plural2}: ${joinValues(issue3.keys, ", ")}`;
+        const plural3 = issue3.keys.length > 1 ? "s" : "";
+        return `Chave${plural3} inv\xE1lida${plural3}: ${joinValues(issue3.keys, ", ")}`;
       }
       case "invalid_key":
         return `Entrada inv\xE1lida n${translateOriginWithArticle(issue3.origin, "definite")}`;
@@ -42843,8 +42843,8 @@ var error45 = () => {
       case "not_multiple_of":
         return `N\xFAmero inv\xE1lido: deve ser m\xFAltiplo de ${issue3.divisor}`;
       case "unrecognized_keys": {
-        const plural2 = issue3.keys.length > 1 ? "s" : "";
-        return `Chave${plural2} inv\xE1lida${plural2}: ${joinValues(issue3.keys, ", ")}`;
+        const plural3 = issue3.keys.length > 1 ? "s" : "";
+        return `Chave${plural3} inv\xE1lida${plural3}: ${joinValues(issue3.keys, ", ")}`;
       }
       case "invalid_key":
         return `Entrada inv\xE1lida n${translateOriginWithArticle(issue3.origin, "definite")}`;
@@ -45039,12 +45039,12 @@ function compileFn(schema, options) {
   doc.write(outputAccessor === null ? `return true;` : `return ${outputAccessor};`);
   const constantNames = ["INVALID", ...ctx.constants.keys()];
   const constantValues = [INVALID, ...ctx.constants.values()];
-  const code2 = doc.content.join("\n");
+  const code3 = doc.content.join("\n");
   const fullCode = options?.debug ? constantNames.length > 0 ? `// Constants: ${constantNames.join(", ")}
-${code2}` : code2 : "";
+${code3}` : code3 : "";
   const F = Function;
   const factoryCode = `return (input) => {
-${code2}
+${code3}
 }`;
   let fn;
   try {
@@ -54162,6 +54162,9 @@ function applyProviderOverrides(cfg, o) {
   return { ...cfg, provider: p };
 }
 
+// core/render.ts
+var import_node_crypto2 = require("node:crypto");
+
 // core/agent.ts
 var AGENT_LABEL = "mergejudge:agent";
 var isAgentLabel = (name) => (name ?? "").trim().toLowerCase() === AGENT_LABEL;
@@ -54714,14 +54717,15 @@ var FEEDBACK_LABELS = [
   { kind: "missed", label: "Missed something" }
 ];
 function renderFeedback(rubric = []) {
-  const out = [FEEDBACK_MARKER, "### Feedback for MergeJudge", ""];
+  const out = [FEEDBACK_MARKER, "**Was this review right?**", ""];
   for (const f of FEEDBACK_LABELS) out.push(`- [ ] ${f.label}`);
   const scored = rubric.filter((r) => r.verdict === "fail" || r.verdict === "unverified" || r.score !== void 0 && r.score <= 2);
   if (scored.length) {
-    out.push("", "#### Rubric feedback (tick what you checked: wrong = a false alarm, right = a real problem)", "");
+    out.push("", "<details><summary>Rate each flagged check</summary>", "", "Tick **wrong** if the check was a false alarm, **right** if it found a real problem.", "");
     for (const r of scored) out.push(`- [ ] ${escapeMd(r.id)}: wrong`, `- [ ] ${escapeMd(r.id)}: right`);
+    out.push("", "</details>");
   }
-  out.push("", "<sub>Tick a box (or comment <code>/mergejudge learn &lt;note&gt;</code>) \u2014 feedback is stored on the <code>mergejudge-learning</code> branch, never in this PR.</sub>");
+  out.push("", "<sub>Tick a box or comment <code>/mergejudge learn &lt;note&gt;</code>. Feedback is stored on the <code>mergejudge-learning</code> branch, never in this PR.</sub>");
   return out.join("\n");
 }
 var kindByLabel = Object.fromEntries(FEEDBACK_LABELS.map((f) => [f.label.toLowerCase(), f.kind]));
@@ -54786,45 +54790,15 @@ function groupBuckets(agg) {
 var plainHttps = (u) => u && /^https:\/\/[^\s()<>"'`]+$/.test(u) ? u : void 0;
 function renderLaneMap(agg, env, opts = {}) {
   const { emoji: emoji3, escape: esc2 } = env;
-  const buckets = groupBuckets(agg);
   const out = [];
   const img = plainHttps(opts.imageUrl);
   if (img) out.push(`![Lane map](${img})`, "", "_Decision path: PR opened \u2192 directory buckets \u2192 label / PR holds \u2192 final lane; green = auto, amber = review, red = block._", "");
-  const raisers = agg.files.filter((f) => agg.lane !== "auto" && f.lane === agg.lane);
-  const causes = [
-    ...raisers.slice(0, env.maxRows).map((f) => esc2(f.path)),
-    ...raisers.length > env.maxRows ? [`${raisers.length - env.maxRows} more files`] : [],
-    ...agg.labelReasons.slice(0, env.maxRows).map(esc2)
-  ];
-  const why = causes.length ? `raised by ${causes.join("; ")}` : agg.lane === "auto" ? `all ${agg.files.length} files are auto; no holds raised the lane` : "no file or hold reason supplied";
-  out.push(`Why this lane? ${emoji3[agg.lane]} \`${agg.lane}\` \u2014 ${why}.`, "");
-  const counts = { auto: 0, review: 0, block: 0 };
-  for (const f of agg.files) counts[f.lane]++;
-  out.push(`${emoji3.auto} \`auto ${counts.auto}\` \xB7 ${emoji3.review} \`review ${counts.review}\` \xB7 ${emoji3.block} \`block ${counts.block}\` \xB7 **${agg.files.length} files total**`, "", "### \u{1F5FA}\uFE0F Lane choice map", "");
+  const buckets = opts.buckets ? groupBuckets(agg) : [];
   if (buckets.length) {
-    out.push("| Bucket | " + emoji3.auto + " auto | " + emoji3.review + " review | " + emoji3.block + " block |", "|---|---|---|---|");
-    for (const b of buckets.slice(0, env.maxRows)) {
-      out.push(`| ${esc2(b.name)} | ${b.counts.auto} | ${b.counts.review} | ${b.counts.block} |`);
-    }
+    out.push("| Folder | " + emoji3.auto + " auto | " + emoji3.review + " review | " + emoji3.block + " block |", "|---|---|---|---|");
+    for (const b of buckets.slice(0, env.maxRows)) out.push(`| ${esc2(b.name)} | ${b.counts.auto} | ${b.counts.review} | ${b.counts.block} |`);
     out.push(...env.more(env.maxRows, buckets.length), "");
   }
-  if (agg.files.length) {
-    const files = [...agg.files].sort((a, b) => LANE_ORDER[b.lane] - LANE_ORDER[a.lane]);
-    out.push(
-      `### File lanes (${agg.files.length})`,
-      "",
-      "Raisers first, then other review/block files, then auto files (up to " + env.maxRows + " rows).",
-      "",
-      "| File | Lane | Source | Reason |",
-      "|---|---|---|---|"
-    );
-    for (const f of files.slice(0, env.maxRows)) {
-      const raised = agg.lane !== "auto" && f.lane === agg.lane ? " \xB7 **raiser**" : "";
-      out.push(`| ${esc2(f.path)} | ${emoji3[f.lane]} \`${f.lane}\`${raised} | ${esc2(f.source ?? "rule")} | ${env.reason?.(f) || esc2(f.reasons.join("; ")) || "-"} |`);
-    }
-    out.push(...env.more(env.maxRows, files.length), "");
-  }
-  out.push(`${emoji3.review} \`review\` is advisory (\`${env.checkName}\` stays neutral); ${emoji3.block} \`block\` fails \`${env.checkName}\`. The map only explains the lane.`, "");
   const panel = plainHttps(opts.panelUrl);
   if (panel) out.push(`[Deeper view in MergeJudge panel](${panel})`, "");
   return out;
@@ -54838,6 +54812,8 @@ function escapeMd(s) {
 }
 var MAX_COMMENT_CHARS = 6e4;
 var MAX_LIST_ROWS = 100;
+var MAX_FILES_PER_REASON = 10;
+var BUCKET_TABLE_MIN_FILES = 15;
 var moreNote = (shown, total) => total > shown ? [`_\u2026and ${total - shown} more not shown (${total} in total)._`] : [];
 function capBody(head, tail, max = MAX_COMMENT_CHARS) {
   if (head.length + tail.length <= max) return head + tail;
@@ -54847,11 +54823,80 @@ function capBody(head, tail, max = MAX_COMMENT_CHARS) {
   const open3 = (cut.match(/<details/g) ?? []).length - (cut.match(/<\/details>/g) ?? []).length;
   return cut + "\n" + "</details>\n".repeat(Math.max(open3, 0)) + note2 + tail;
 }
-function aiReasonNote(f) {
+function lineFindingsOf(findings) {
+  return findings.flatMap((f) => f.line === void 0 ? [] : [{ path: f.path, line: f.line, message: f.message }]);
+}
+var plural2 = (n, one, many = one + "s") => `${n} ${n === 1 ? one : many}`;
+var cap = (s, max) => s.length > max ? s.slice(0, max - 1).trimEnd() + "\u2026" : s;
+var upFirst = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+var code = (s) => /[`\r\n]/.test(s) ? escapeMd(s) : `\`${s}\``;
+var CRITERION_LABELS = {
+  "sec.no-secrets": "Security: secrets",
+  "sec.no-exfiltration": "Security: data exfiltration",
+  "sec.no-unsafe-exec": "Security: unsafe execution",
+  "sec.input-handling": "Security: input handling",
+  "cor.logic": "Logic",
+  "cor.errors": "Error handling",
+  "cor.tests": "Tests",
+  "mnt.readable": "Readability",
+  "mnt.scoped": "Scope"
+};
+function criterionLabel(id) {
+  return CRITERION_LABELS[id] ?? id;
+}
+var plainHttps2 = (u) => u && /^https:\/\/[^\s()<>"'`]+$/.test(u) ? u.replace(/\/+$/, "") : void 0;
+function diffLink(prUrl, path2, line) {
+  return `${prUrl}/files#diff-${(0, import_node_crypto2.createHash)("sha256").update(path2).digest("hex")}${line ? `R${line}` : ""}`;
+}
+function trustedLinkHost(url2) {
+  try {
+    const h = new URL(url2).hostname.toLowerCase();
+    return h === "mergejudge.si" || h.endsWith(".mergejudge.si") || h === "github.com" || h === "docs.github.com";
+  } catch {
+    return false;
+  }
+}
+function renderNote(note2) {
+  const flat = note2.replace(/\s*[\r\n]+\s*/g, " ");
+  const URL_CHARS = "[^\\s()<>\"'`\\\\\\[\\]@*|~{}]+";
+  const re = new RegExp(`\\[([A-Za-z0-9 ._,'-]{1,80})\\]\\((https://${URL_CHARS})\\)|https://${URL_CHARS}`, "g");
+  const text2 = (s) => {
+    const m = s.match(/^(\s*)([\s\S]*?)(\s*)$/);
+    return (m[1] ? " " : "") + escapeMd(m[2]) + (m[3] ? " " : "");
+  };
+  let out = "", last = 0;
+  for (const m of flat.matchAll(re)) {
+    if (!trustedLinkHost(m[2] ?? m[0].replace(/[.,;:!?]+$/, ""))) continue;
+    out += text2(flat.slice(last, m.index));
+    if (m[1] !== void 0) {
+      out += `[${m[1]}](${m[2]})`;
+      last = m.index + m[0].length;
+    } else {
+      const url2 = m[0].replace(/[.,;:!?]+$/, "");
+      out += url2;
+      last = m.index + url2.length;
+    }
+  }
+  return (out + text2(flat.slice(last))).trim();
+}
+function aiNoteText(f) {
   const raw = f.llmReason?.replace(/\s+/g, " ").trim();
-  if (!raw || f.reasons.some((r) => r.includes(raw))) return "";
-  const capped = raw.length > 200 ? raw.slice(0, 199).trimEnd() + "\u2026" : raw;
-  return `AI: ${escapeMd(capped)}`;
+  if (!raw || f.reasons.some((r) => r.includes(raw) && !r.startsWith("LLM: "))) return "";
+  return escapeMd(cap(raw, 200));
+}
+function cleanReason(r) {
+  if (r.startsWith("LLM: ")) return null;
+  if (r === "LLM flagged this file") return "AI flagged this file";
+  const rubric = r.match(/^rubric (\S+) failed$/);
+  if (rubric) return `Check failed: ${criterionLabel(rubric[1])}`;
+  const wasAuto = r.match(/^rule: auto \((.*)\)$/);
+  if (wasAuto) return `Rules said auto (${wasAuto[1]})`;
+  const t = r.replace(/\s*\(always needs human review\)/i, "").replace(/:\s*always needs human review/i, "").trim();
+  return t ? upFirst(t) : null;
+}
+function fileReasonHeads(f) {
+  const heads = [...new Set(f.reasons.map(cleanReason).filter((x) => !!x))];
+  return heads.length ? heads : f.llmReason ? ["AI flagged this file"] : [];
 }
 function renderLaneExplanation(agg) {
   const explanation = explainLane(agg);
@@ -54873,79 +54918,161 @@ var AUTO_MERGE_NOTE = "With approval.mode: auto-merge-only, it asks GitHub to au
 function mergeNote(approval) {
   return approval?.enabled === true && approval.mode === "auto-merge-only" ? `${MERGE_NOTE} ${AUTO_MERGE_NOTE}` : MERGE_NOTE;
 }
-function renderLaneCoach(unverified = 0) {
-  return [
-    `> \`review\` is advisory: the \`${CHECK_NAME}\` check concludes \`neutral\`; only \`block\` fails it.`,
-    `> To make \`block\` stop merges, require the check \`${CHECK_NAME}\` in branch protection or rulesets.`,
-    ...unverified ? [`> ${unverified} finding${unverified === 1 ? "" : "s"} below need${unverified === 1 ? "s" : ""} human validation (no verified diff quote).`] : []
-  ];
+var isOpen = (x) => x.verdict === "fail" || x.verdict === "unverified";
+function outcomeLines(agg, flagged, problems, lineComments) {
+  const total = agg.files.length;
+  const parts = [`**Overall lane:** ${EMOJI[agg.lane]} \`${agg.lane}\``];
+  if (agg.lane === "auto") parts.push(total ? `all ${plural2(total, "file")} look${total === 1 ? "s" : ""} safe to auto-merge` : "no files to review");
+  else if (flagged) parts.push(`${flagged} of ${plural2(total, "file")} need${flagged === 1 ? "s" : ""} a human look`);
+  else parts.push("held by PR labels or PR-level checks");
+  if (problems) parts.push(`${plural2(problems, "problem")} found`);
+  if (lineComments) parts.push(plural2(lineComments, "line comment"));
+  const advisory = agg.lane === "review" ? [`*\`review\` is advisory: the \`${CHECK_NAME}\` check stays neutral; only \`block\` fails it.*`] : agg.lane === "block" ? [`*\`block\` fails the \`${CHECK_NAME}\` check.*`] : [];
+  return [parts.join(" \xB7 "), "", ...advisory, ...advisory.length ? [""] : []];
+}
+function whatToCheck(r, rubricOpen) {
+  const { agg } = r;
+  const base = plainHttps2(r.prUrl);
+  const laneOf = (path2) => agg.files.find((f) => f.path === path2)?.lane ?? "review";
+  const loc = (path2, line) => base ? line ? `[L${line}](${diffLink(base, path2, line)})` : `[diff](${diffLink(base, path2)})` : line ? `${escapeMd(path2)}:${line}` : "";
+  const key = (path2, line) => `${path2}:${line}`;
+  const lineKeys = new Set((r.lineFindings ?? []).map((l) => key(l.path, l.line)));
+  const rubricKeys = /* @__PURE__ */ new Set();
+  const groups = /* @__PURE__ */ new Map();
+  const group = (path2) => {
+    let g2 = groups.get(path2);
+    if (!g2) groups.set(path2, g2 = path2 ? { title: escapeMd(path2), lane: laneOf(path2), bullets: [] } : { title: "Whole PR", lane: "review", fixed: "pr", bullets: [] });
+    return g2;
+  };
+  for (const x of rubricOpen) {
+    const detail = [x.severity, ...x.verdict === "unverified" ? ["needs a human check"] : [], ...x.score !== void 0 ? [`${x.score}/5`] : []].join(", ");
+    const ev = x.evidence;
+    const onLine = ev?.line !== void 0 && lineKeys.has(key(ev.path, ev.line));
+    if (ev?.line !== void 0) rubricKeys.add(key(ev.path, ev.line));
+    const where = ev ? loc(ev.path, ev.line) : "";
+    group(ev?.path ?? "").bullets.push(`**${escapeMd(criterionLabel(x.id))} (${detail}):** ${escapeMd(x.justification) || "-"}${where ? ` ${where}` : ""}${onLine ? " \xB7 line comment" : ""}`);
+  }
+  const seen = /* @__PURE__ */ new Set();
+  for (const l of r.lineFindings ?? []) {
+    const k = key(l.path, l.line);
+    if (rubricKeys.has(k) || seen.has(k)) continue;
+    seen.add(k);
+    group(l.path).bullets.push(`${loc(l.path, l.line)} ${escapeMd(l.message)}`);
+  }
+  for (const f of r.fileFindings ?? []) group(f.path).bullets.push(`${escapeMd(f.message)} \xB7 _needs a human check (no verified line)_`);
+  if (agg.labelReasons.length) groups.set("\0labels", { title: "PR labels / holds", lane: agg.lane, fixed: "labels", bullets: agg.labelReasons.map(escapeMd) });
+  const rank = (g2) => g2.fixed === "labels" ? -2 : g2.fixed === "pr" ? -1 : LANE_ORDER[g2.lane];
+  const ordered = [...groups.values()].sort((a, b) => rank(b) - rank(a));
+  const total = ordered.reduce((n, g2) => n + g2.bullets.length, 0);
+  if (!total) return ["### What to check", "", "Nothing specific flagged.", ""];
+  const out = ["### What to check", ""];
+  let shown = 0;
+  for (const g2 of ordered) {
+    const room = MAX_LIST_ROWS - shown;
+    if (room <= 0) break;
+    const bullets = g2.bullets.slice(0, room);
+    shown += bullets.length;
+    out.push(`**${g2.title}**`, ...bullets.map((b) => `- ${b}`), "");
+  }
+  out.push(...moreNote(shown, total).flatMap((m) => [m, ""]));
+  return out;
+}
+function whyThisLane(r, flagged) {
+  const { agg } = r;
+  const subject = agg.lane === "auto" ? agg.files : flagged;
+  const byReason = /* @__PURE__ */ new Map();
+  for (const f of subject) for (const head of fileReasonHeads(f)) (byReason.get(head) ?? byReason.set(head, []).get(head)).push(f.path);
+  let short;
+  if (agg.lane === "auto") short = escapeMd(explainLane(agg).summary.replace(/^auto: /, ""));
+  else if (flagged.length && byReason.size) short = `${plural2(flagged.length, "file")} matched ${plural2(byReason.size, "rule")}`;
+  else if (flagged.length) short = `AI flagged ${plural2(flagged.length, "file")}`;
+  else short = `held by ${plural2(agg.labelReasons.length, "PR label or check", "PR labels or checks")}`;
+  const out = [`<details><summary><b>Why this lane?</b> ${short}</summary>`, ""];
+  const reasons = [...byReason].slice(0, MAX_LIST_ROWS);
+  for (const [head, paths] of reasons) {
+    const list2 = paths.slice(0, MAX_FILES_PER_REASON).map(code).join(", ");
+    out.push(`- **${escapeMd(head)}:** ${list2}${paths.length > MAX_FILES_PER_REASON ? ` +${paths.length - MAX_FILES_PER_REASON} more` : ""}`);
+  }
+  out.push(...moreNote(MAX_LIST_ROWS, byReason.size));
+  const aiNotes = flagged.flatMap((f) => {
+    const t = aiNoteText(f);
+    return t ? [`- ${code(f.path)}: ${t}`] : [];
+  });
+  if (aiNotes.length) out.push("", "AI notes:", "", ...aiNotes.slice(0, MAX_LIST_ROWS), ...moreNote(MAX_LIST_ROWS, aiNotes.length));
+  if (agg.labelReasons.length) out.push("", "PR labels / holds:", "", ...agg.labelReasons.slice(0, MAX_LIST_ROWS).map((l) => `- ${escapeMd(l)}`));
+  if (!reasons.length && !aiNotes.length && !agg.labelReasons.length) out.push("No rule reasons were recorded.");
+  out.push("", "</details>", "");
+  return out;
+}
+function filesSection(r, flagged, safe) {
+  const { agg } = r;
+  if (!agg.files.length) return [];
+  const n = (l) => agg.files.filter((f) => f.lane === l).length;
+  const counts = ["block", "review", "auto"].filter((l) => n(l)).map((l) => `${n(l)} ${l}`).join(" \xB7 ");
+  const out = [`<details><summary><b>Files (${agg.files.length}):</b> ${counts}</summary>`, ""];
+  if (r.laneMap === true) {
+    out.push(...renderLaneMap(
+      agg,
+      { emoji: EMOJI, escape: escapeMd, maxRows: MAX_LIST_ROWS, more: moreNote },
+      { imageUrl: r.laneMapImageUrl, panelUrl: r.panelUrl, buckets: agg.files.length > BUCKET_TABLE_MIN_FILES }
+    ));
+  }
+  const files = [...agg.files].sort((a, b) => LANE_ORDER[b.lane] - LANE_ORDER[a.lane]);
+  for (const f of files.slice(0, MAX_LIST_ROWS)) {
+    const why = f.codeAuto ? "small code file, auto via code_auto opt-in" : fileReasonHeads(f).slice(0, 2).join(", ");
+    out.push(`- ${EMOJI[f.lane]} ${code(f.path)}${why ? ` \u2014 ${escapeMd(cap(why, 80))}` : ""}`);
+  }
+  out.push(...moreNote(MAX_LIST_ROWS, files.length), "");
+  if (safe.length && flagged.length) out.push(`The ${plural2(safe.length, "auto file")} could go in a separate auto-mergeable PR.`, "");
+  out.push("</details>", "");
+  return out;
+}
+function allChecks(rubric) {
+  if (!rubric.length) return [];
+  const icon = { pass: "\u2705", fail: "\u274C", "n/a": "\u2796", unverified: "\u2754" };
+  const n = (v) => rubric.filter((x) => x.verdict === v).length;
+  const counts = [["pass", "pass"], ["fail", "fail"], ["unverified", "unverified"], ["n/a", "n/a"]].filter(([v]) => n(v)).map(([v, word]) => `${n(v)} ${word}`).join(" \xB7 ");
+  const out = [`<details><summary><b>All checks</b> (${counts})</summary>`, ""];
+  for (const x of rubric.slice(0, MAX_LIST_ROWS))
+    out.push(`- ${icon[x.verdict]} \`${escapeMd(x.id)}\`${x.score !== void 0 ? ` ${x.score}/5` : ""}: ${isOpen(x) ? "see What to check" : escapeMd(x.justification) || "-"}`);
+  out.push(...moreNote(MAX_LIST_ROWS, rubric.length), "", "</details>", "");
+  return out;
+}
+function notChecked(r) {
+  const out = [];
+  if (r.mode === "rules-only" && !r.notes.some((x) => /rules-only|AI review (?:unavailable|skipped)/i.test(x))) out.push("- AI review was not performed; deterministic rules only.");
+  for (const p of r.policyFiles ?? []) if (p.truncated) out.push(`- Policy truncated: ${escapeMd(p.path)}`);
+  for (const x of r.agg.rubric ?? []) if (x.verdict === "unverified") out.push(`- Unverified check: ${escapeMd(criterionLabel(x.id))}`);
+  const MISSING = /^Policy file missing or empty: (.+)$/;
+  const missing = r.notes.map((n) => n.match(MISSING)?.[1]).filter((p) => !!p);
+  for (const n of r.notes) if (!MISSING.test(n)) out.push(`- ${renderNote(n)}`);
+  if (missing.length) out.push(`- Policy ${missing.length === 1 ? "file" : "files"} missing or empty: ${missing.map(escapeMd).join(", ")}`);
+  if (!out.length) return "";
+  out.push("");
+  return capBody(["### Not checked", "", ...out].join("\n"), "", 12e3);
 }
 function renderComment(r) {
   const { agg } = r;
   const flagged = agg.files.filter((f) => f.lane !== "auto");
   const safe = agg.files.filter((f) => f.lane === "auto");
+  const rubric = agg.rubric ?? [];
+  const rubricOpen = rubric.filter(isOpen);
+  const problems = rubricOpen.length + (r.fileFindings?.length ?? 0);
   const out = [MARKER, "## \u2696\uFE0F MergeJudge", ""];
-  if (r.laneMap === true) {
-    out.push(...renderLaneMap(agg, { emoji: EMOJI, escape: escapeMd, maxRows: MAX_LIST_ROWS, more: moreNote, checkName: CHECK_NAME, reason: (f) => [escapeMd(f.reasons.join("; ")), aiReasonNote(f)].filter(Boolean).join("; ") }, { imageUrl: r.laneMapImageUrl, panelUrl: r.panelUrl }));
-    out.push(escapeMd(agg.summary), "");
-  } else {
-    out.push(renderLaneExplanation(agg), "", escapeMd(agg.summary), "");
-    out.push(`**Overall lane:** ${EMOJI[agg.lane]} \`${agg.lane}\``, "");
-    if (agg.labelReasons.length) out.push(...agg.labelReasons.map((l) => `- \u{1F3F7}\uFE0F ${l}`), "");
-  }
-  out.push(...renderLaneCoach(r.fileFindings?.length ?? 0), "");
-  if (!r.laneMap && flagged.length) {
-    out.push("### Files needing human review", "", "| File | Lane | Source | Reason |", "|---|---|---|---|");
-    for (const f of flagged.slice(0, MAX_LIST_ROWS)) {
-      const reason = [escapeMd(f.reasons.join("; ")), aiReasonNote(f)].filter(Boolean).join("; ") || "-";
-      out.push(`| ${escapeMd(f.path)} | ${EMOJI[f.lane]} ${f.lane} | ${f.source ?? "rule"} | ${reason} |`);
-    }
-    out.push(...moreNote(MAX_LIST_ROWS, flagged.length), "");
-  }
-  if (!r.laneMap && safe.length) {
-    out.push(`<details><summary>Safe files (${safe.length})</summary>`, "");
-    for (const f of safe.slice(0, MAX_LIST_ROWS)) out.push(`- ${escapeMd(f.path)}${f.codeAuto ? " (code, auto via code_auto opt-in)" : ""}`);
-    out.push(...moreNote(MAX_LIST_ROWS, safe.length), "", "</details>", "");
-  }
-  if (safe.length && flagged.length) {
-    out.push(
-      "### Split suggestion",
-      "",
-      "This PR mixes auto-mergeable and review/block changes. These files could go in a separate auto-mergeable PR:",
-      "",
-      ...safe.slice(0, MAX_LIST_ROWS).map((f) => `- ${escapeMd(f.path)}`),
-      ...moreNote(MAX_LIST_ROWS, safe.length),
-      ""
-    );
-  }
-  if (agg.rubric?.length) {
-    const icon = { pass: "\u2705", fail: "\u274C", "n/a": "\u2796", unverified: "\u2754" };
-    const fails = agg.rubric.filter((x) => x.verdict === "fail" || x.verdict === "unverified");
-    const passes = agg.rubric.filter((x) => x.verdict === "pass").length;
-    const na = agg.rubric.filter((x) => x.verdict === "n/a").length;
-    out.push(`### Rubric: ${passes} pass \xB7 ${fails.length} fail/unverified \xB7 ${na} n/a`, "");
-    for (const x of fails) {
-      const where = x.evidence ? ` (${escapeMd(x.evidence.path)}${x.evidence.line ? ":" + x.evidence.line : ""})` : "";
-      const sc = x.score !== void 0 ? ` ${x.score}/5` : "";
-      out.push(`- ${icon[x.verdict]} \`${escapeMd(x.id)}\` ${x.severity}${sc}${where}: ${escapeMd(x.justification)}${x.raiseTo ? ` \u2192 raised to ${x.raiseTo}` : ""}`);
-    }
-    if (fails.length) out.push("");
-    out.push(`<details><summary>All criteria</summary>`, "");
-    for (const x of agg.rubric.slice(0, MAX_LIST_ROWS))
-      out.push(`- ${icon[x.verdict]} \`${escapeMd(x.id)}\`${x.score !== void 0 ? ` ${x.score}/5` : ""}: ${escapeMd(x.justification) || "-"}`);
-    out.push(...moreNote(MAX_LIST_ROWS, agg.rubric.length), "", "</details>", "");
-  }
-  if (r.fileFindings?.length) {
-    const n = r.fileFindings.length;
-    out.push(`### \u2754 Needs human (${n})`, "", `${n} finding${n === 1 ? " needs" : "s need"} human validation (no verified diff quote), so ${n === 1 ? "it was" : "they were"} not posted as line comments.`, "");
-    for (const f of r.fileFindings.slice(0, MAX_LIST_ROWS)) out.push(`- ${escapeMd(f.path)}: ${escapeMd(f.message)}`);
-    out.push(...moreNote(MAX_LIST_ROWS, r.fileFindings.length), "");
-  }
-  for (const n of r.notes) out.push(`> \u26A0\uFE0F ${escapeMd(n)}`, "");
+  out.push(...outcomeLines(agg, flagged.length, problems, r.lineFindings?.length ?? 0));
+  out.push(escapeMd(agg.summary), "");
+  out.push(...whatToCheck(r, rubricOpen), ...whyThisLane(r, flagged), ...filesSection(r, flagged, safe), ...allChecks(rubric));
   const head = out.join("\n");
-  const tail = ["---", "", renderFeedback(agg.rubric ?? []), ""];
+  const unchecked = notChecked(r);
+  const tail = [...unchecked ? [unchecked] : [], "---", "", renderFeedback(rubric), ""];
   tail.push(
-    `<sub>Mode: ${escapeMd(r.mode)} \xB7 ~${r.tokensEstimate} tokens (estimate)` + (r.policyFiles?.length ? ` \xB7 Policy: ${r.policyFiles.map((p) => escapeMd(p.path) + (p.truncated ? " (truncated)" : "")).join(", ")}` : "") + (r.breakdown ? ` \xB7 tokens system ${r.breakdown.system}/policy ${r.breakdown.policy}/rubric ${r.breakdown.rubric}/diff ${r.breakdown.diff}${r.breakdown.context ? `/context ${r.breakdown.context}` : ""}${r.breakdown.tools ? `/tools ${r.breakdown.tools} (${r.breakdown.tool_calls ?? 0} calls)` : ""}${r.breakdown.second_pass ? `/second ${r.breakdown.second_pass}` : ""}/out ${r.breakdown.output}` : "") + ` \xB7 ${mergeNote(r.approval)}</sub>`
+    `<sub>${r.mode === "rules-only" ? "rules-only \xB7 " : ""}~${r.tokensEstimate} tokens \xB7 ${mergeNote(r.approval)} \xB7 To make <code>block</code> stop merges, require <code>${CHECK_NAME}</code> in branch protection.</sub>`,
+    "",
+    "<details><summary><sub>Run details</sub></summary>",
+    "",
+    `<sub>Mode: ${escapeMd(r.mode)}` + (r.policyFiles?.length ? ` \xB7 Policy: ${r.policyFiles.map((p) => escapeMd(p.path) + (p.truncated ? " (truncated)" : "")).join(", ")}` : "") + (r.breakdown ? ` \xB7 tokens system ${r.breakdown.system}/policy ${r.breakdown.policy}/rubric ${r.breakdown.rubric}/diff ${r.breakdown.diff}${r.breakdown.context ? `/context ${r.breakdown.context}` : ""}${r.breakdown.tools ? `/tools ${r.breakdown.tools} (${r.breakdown.tool_calls ?? 0} calls)` : ""}${r.breakdown.second_pass ? `/second ${r.breakdown.second_pass}` : ""}/out ${r.breakdown.output}` : "") + "</sub>",
+    "",
+    "</details>"
   );
   return capBody(head, "\n" + tail.join("\n"));
 }
@@ -54973,11 +55100,11 @@ var tok = (s) => (s ?? "").replace(/[^A-Za-z0-9._:/@+-]/g, "_").slice(0, 60);
 var attrs = (a) => Object.entries(a).filter(([, v]) => v).map(([k, v]) => ` ${k}=${encodeURIComponent(v)}`).join("");
 var marker = (key, state, extra = {}) => `${INLINE_MARKER} key=${encodeURIComponent(key)} state=${state}${attrs(extra)} -->`;
 function findingText(body) {
-  return body.replace(/\n*```suggestion\n[\s\S]*?\n```/g, "").replace(/<!--[\s\S]*?-->/g, "").replace(/^\s*(?:⚖️\s*)?\*\*MergeJudge \(LLM\):\*\*\s*/, "").replace(/\\([\\`*_{}\[\]()#+\-.!|<>~])/g, "$1").trim();
+  return body.replace(/\n*```suggestion\n[\s\S]*?\n```/g, "").replace(/<!--[\s\S]*?-->/g, "").replace(/^\s*(?:⚖️\s*)?\*\*MergeJudge \((?:LLM|AI)\):\*\*\s*/, "").replace(/\\([\\`*_{}\[\]()#+\-.!|<>~])/g, "$1").trim();
 }
 function inlineBody(f, ctx = {}) {
   return `${marker(keyOf(f.path, f.line), "active", { sha: tok(ctx.sha), rv: tok(ctx.reviewer) })}
-\u2696\uFE0F **MergeJudge (LLM):** ${escapeMd(f.message)}${f.suggestion ? `
+\u2696\uFE0F **MergeJudge (AI):** ${escapeMd(f.message)}${f.suggestion ? `
 
 \`\`\`suggestion
 ${f.suggestion}
@@ -56212,7 +56339,7 @@ function lessonLines(lessons, delim) {
   }
   return out;
 }
-function outcomeLines(s) {
+function outcomeLines2(s) {
   const merged = s?.byKind?.merged_over_lane ?? 0;
   if (!s || merged < OUTCOME_MIN) return [];
   const crit = top(s.byCriterion, 3), reason = top(s.byReason, 3);
@@ -56225,7 +56352,7 @@ function buildLearnedLines(i, delim) {
   if (fa.length) parts.push(["Known false alarms:", ...fa]);
   const ls = lessonLines(i.lessons ?? [], delim);
   if (ls.length) parts.push(["Recent notes from writers:", ...ls]);
-  const oc = outcomeLines(i.outcomeStats);
+  const oc = outcomeLines2(i.outcomeStats);
   if (oc.length) parts.push(["What reviewers did:", ...oc]);
   const ms = missedPromptItems(i.missed ?? [], delim);
   if (ms.length) parts.push([MISSED_HEADER, ...ms.map((t) => `- ${t}`)]);
@@ -56347,12 +56474,12 @@ async function gatherContext(files, src, opts = {}, log = () => {
       dropped.push(path2);
       return false;
     }
-    const cap = Math.min(left, o.max_file_bytes);
+    const cap2 = Math.min(left, o.max_file_bytes);
     let content = text2;
     let truncated = false;
-    if (text2.length > cap) {
+    if (text2.length > cap2) {
       truncated = true;
-      content = focus?.length ? excerpt(text2, focus, cap) : text2.slice(0, cap);
+      content = focus?.length ? excerpt(text2, focus, cap2) : text2.slice(0, cap2);
       why += focus?.length ? ", excerpt around relevant lines" : "";
     }
     pieces.push({ path: path2, kind, why, content, truncated });
@@ -56565,11 +56692,11 @@ async function retrieveDeepContext(snap, files, opts = {}, log = () => {
   const full = () => o.max_bytes - bytes < 512 || pieces.length >= o.max_files;
   const stats = { hop1: 0, literal: 0, hop2: 0, scanned: 0, timedOut: false };
   const addPiece = (path2, text2, kind, why, re, cap0 = o.max_file_bytes) => {
-    const cap = Math.min(o.max_bytes - bytes, cap0);
-    const truncated = text2.length > cap;
+    const cap2 = Math.min(o.max_bytes - bytes, cap0);
+    const truncated = text2.length > cap2;
     const lines = text2.split("\n");
     const hit = re ? lines.flatMap((l, i) => re.test(l) ? [[i + 1, i + 1]] : []) : [];
-    const content = truncated ? excerpt(text2, hit.length ? hit : [[1, 40]], cap) : text2;
+    const content = truncated ? excerpt(text2, hit.length ? hit : [[1, 40]], cap2) : text2;
     pieces.push({ path: path2, kind, why: why + (truncated ? ", excerpt around relevant lines" : ""), content, truncated });
     bytes += content.length;
     seen.add(path2);
@@ -57261,8 +57388,8 @@ function isAbortError(e) {
 var NET_CODES = /* @__PURE__ */ new Set(["ECONNRESET", "ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "ETIMEDOUT", "EPIPE", "EHOSTUNREACH", "ENETUNREACH"]);
 function isNetworkError(e) {
   if (e instanceof TypeError) return true;
-  const code2 = e.code ?? e.cause?.code;
-  return typeof code2 === "string" && (NET_CODES.has(code2) || code2.startsWith("UND_ERR_"));
+  const code3 = e.code ?? e.cause?.code;
+  return typeof code3 === "string" && (NET_CODES.has(code3) || code3.startsWith("UND_ERR_"));
 }
 function statusOf(e) {
   const s = e.status ?? e.statusCode;
@@ -57298,8 +57425,8 @@ function fill(partial2) {
 }
 function withCallBudget(t, budgetMs) {
   if (typeof budgetMs !== "number" || !Number.isFinite(budgetMs)) return t;
-  const cap = Math.max(1, Math.floor(budgetMs));
-  return { ...t, budgetMs: Math.min(t.budgetMs ?? LLM_HTTP_DEFAULTS.budgetMs, cap) };
+  const cap2 = Math.max(1, Math.floor(budgetMs));
+  return { ...t, budgetMs: Math.min(t.budgetMs ?? LLM_HTTP_DEFAULTS.budgetMs, cap2) };
 }
 async function defaultSleep(ms, signal) {
   if (ms <= 0) return;
@@ -58597,7 +58724,7 @@ var RULE_STATUS = {
 var effectiveCap = (maxAttempts, grants = 0) => maxAttempts + Math.max(0, grants);
 
 // core/shepherdfail.ts
-var import_node_crypto2 = require("node:crypto");
+var import_node_crypto3 = require("node:crypto");
 var ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
 var TS_PREFIX = /^\s*(?:\d{4}-\d\d-\d\dT[\d:.]+Z\s*)?(?:\[?\d\d:\d\d:\d\d(?:\.\d+)?\]?\s*)?/;
 var stripAnsi = (s) => s.replace(ANSI, "");
@@ -58645,7 +58772,7 @@ function countFailingTests(log) {
 function fingerprintFailure(job, log) {
   const raw = firstFailureLine(log);
   const line = normalizeError(raw);
-  return { job, hash: (0, import_node_crypto2.createHash)("sha1").update(`${job}
+  return { job, hash: (0, import_node_crypto3.createHash)("sha1").update(`${job}
 ${line}`).digest("hex").slice(0, 10), line, raw, tests: countFailingTests(log) };
 }
 function failureCount(fps) {
@@ -58799,7 +58926,7 @@ function decide(i) {
     return { action: "green" };
   }
   if (i.cantFix.kind === "cant-fix") return hand(i.cantFix.rule, `not a code problem: ${i.cantFix.reason}`);
-  const cap = effectiveCap(i.maxAttempts, i.grants);
+  const cap2 = effectiveCap(i.maxAttempts, i.grants);
   const latest = i.history.latest;
   const postFix = !!latest && latest.sha === i.headSha;
   const known = /* @__PURE__ */ new Set([...i.history.records.flatMap((r) => r.fingerprints), ...i.stateFingerprints ?? []]);
@@ -58810,14 +58937,14 @@ function decide(i) {
     const back = current.filter((h) => known.has(h));
     if (back.length) return hand(RULE.L3, `the fix brought back an earlier failure (fingerprint ${back[0]}) seen in an earlier attempt`);
   }
-  if (i.runAttempt === 1 && !i.rerunRequested && current.some((h) => !known.has(h)) && i.history.attempts < cap)
+  if (i.runAttempt === 1 && !i.rerunRequested && current.some((h) => !known.has(h)) && i.history.attempts < cap2)
     return { action: "rerun", reason: "re-running failed jobs to rule out a flaky test" };
   if (postFix && latest?.failures != null) {
     if (i.checks && i.checks.pending > 0) return { action: "skip", reason: `${i.checks.pending} check(s) on the head are still running; L4 waits for the full picture and a later run or check suite will re-evaluate`, pending: true };
     const now = i.checks ? i.checks.failing : failureCount(i.failures);
     if (now >= latest.failures) return hand(RULE.L4, `the fix did not reduce the failures across all checks (${latest.failures} before, ${now} now)`);
   }
-  if (i.history.attempts >= cap) return hand(RULE.L1, `all ${cap} fix attempts are used (${i.history.attempts}/${cap})`);
+  if (i.history.attempts >= cap2) return hand(RULE.L1, `all ${cap2} fix attempts are used (${i.history.attempts}/${cap2})`);
   if (i.checks && i.checks.pending > 0) return { action: "skip", reason: `${i.checks.pending} check(s) on the head are still running; no fix on a partial picture, a later run or check suite will re-evaluate`, pending: true };
   return { action: "fix", attempt: i.history.attempts + 1 };
 }
@@ -58884,7 +59011,7 @@ var HANDOFF_MARKER = "<!-- mergejudge:shepherd-handoff -->";
 var NEEDS_HUMAN_LABEL = "needs-human";
 var MAX_CHARS = 280;
 var text = (s) => escapeMd(redact(String(s).slice(0, 2e3)).replace(/\s+/g, " ").trim().slice(0, MAX_CHARS)).replace(/@(?=[A-Za-z0-9])/g, "@\u200B");
-var code = (s) => "`" + redact(String(s).slice(0, 2e3)).replace(/[`\r\n]+/g, " ").trim().slice(0, MAX_CHARS) + "`";
+var code2 = (s) => "`" + redact(String(s).slice(0, 2e3)).replace(/[`\r\n]+/g, " ").trim().slice(0, MAX_CHARS) + "`";
 function renderHandoff(h) {
   const out = [
     HANDOFF_MARKER,
@@ -58898,7 +59025,7 @@ function renderHandoff(h) {
   out.push("");
   if (h.failures?.length) {
     out.push("**What failed:**");
-    for (const f of h.failures.slice(0, 5)) out.push(`- ${code(f.job)}: ${code(f.raw || "(no error line found)")} (fingerprint ${code(f.hash)})`);
+    for (const f of h.failures.slice(0, 5)) out.push(`- ${code2(f.job)}: ${code2(f.raw || "(no error line found)")} (fingerprint ${code2(f.hash)})`);
     out.push("");
   }
   out.push("**What it tried:**");
@@ -58911,9 +59038,9 @@ function renderHandoff(h) {
   out.push("");
   if (h.paths?.length || h.hunks?.length) {
     out.push("**What to look at:**");
-    for (const p of (h.paths ?? []).slice(0, 10)) out.push(`- ${code(p)}`);
+    for (const p of (h.paths ?? []).slice(0, 10)) out.push(`- ${code2(p)}`);
     const ours = `${text(h.headRef || "head")} (this PR):`, theirs = `${text(h.baseRef || "base")} (base):`;
-    for (const x of (h.hunks ?? []).slice(0, 10)) out.push(`- ${code(`${x.path}:${x.line}`)} ${ours} ${code(x.ours)} / ${theirs} ${code(x.theirs)}`);
+    for (const x of (h.hunks ?? []).slice(0, 10)) out.push(`- ${code2(`${x.path}:${x.line}`)} ${ours} ${code2(x.ours)} / ${theirs} ${code2(x.theirs)}`);
     out.push("");
   }
   out.push(
@@ -59348,6 +59475,8 @@ async function produceReviewResult(o) {
       mode: "rules-only",
       tokensEstimate: 0,
       approval: cfg.approval,
+      laneMap: cfg.review.lane_map,
+      prUrl: pr.html_url,
       notes: [proposal ? "Head is a learning proposal branch \u2014 LLM skipped." : "Head is the learning branch \u2014 LLM skipped."]
     });
     return {
@@ -59368,7 +59497,7 @@ async function produceReviewResult(o) {
   const shepherdOn = isShepherdOn(labels) && cfg.shepherd.enabled && cfg.shepherd.suggestions && !o.shepherdCommit;
   if (o.skipAi) notes.push(o.skipAi);
   else if (o.providerNote && cfg.provider.type !== "none") notes.push(`LLM disabled (${!provider && o.keyNote || o.providerNote}); rules-only.`);
-  if (o.noProviderNote && !o.skipAi && cfg.provider.type === "none" && !provider) notes.push(o.noProviderNote);
+  if (o.noProviderNote && !o.skipAi && cfg.provider.type === "none" && !provider && !notes.some((n) => /rules-only/i.test(n))) notes.push(o.noProviderNote);
   let llm = null;
   let policies = { text: "", used: [], skipped: [] };
   let tokens2 = 0;
@@ -59442,6 +59571,7 @@ async function produceReviewResult(o) {
     const prompt = { title: pr.title ?? "", body: pr.body ?? "", files: kept, context: context3 };
     const tctx = { ...shepherdOn ? { suggestions: (p) => !isProtectedPath(p, cfg) } : {}, policyText: policies.text, criteria, learnedText: cfg.learning.enabled ? o.learnedLines ? renderLearnedSection(o.learnedLines, DELIM) : buildLearnedContext({ learned: o.learned, lessons: o.lessons, outcomeStats: o.outcomeStats }, DELIM) : "", skippedDiffFiles: skipped, ref: o.ref ?? `#${pr.number}` };
     let res = mode === "deep" && tools && canUseTools(provider) ? await runDeepTriage(provider, prompt, cfg, tctx, { tools }, log.info, log.warning) : await runTriage(provider, prompt, cfg, tctx, log.info, log.warning);
+    if (res.deep?.stopped) notes.push(`AI tool budget exhausted (${res.deep.stopped}); further exploration was not checked.`);
     if (res.llm && aiModeOf(cfg) === "deep") {
       const second = await runSecondPass(provider, prompt, cfg, tctx, res.llm, log.info);
       if (second.note) notes.push(second.note);
@@ -59470,6 +59600,10 @@ async function produceReviewResult(o) {
       await o.llmCache.put({ llm, tokens: tokens2, breakdown: res.breakdown, policiesUsed: policies.used }).catch((e) => log.warning(`Could not cache LLM result: ${e.message}`));
     }
   }
+  const excluded = excludeFromLlm(files, cfg.diff_exclude).skipped;
+  for (const path2 of excluded) notes.push(`Diff excluded from AI review: ${path2}`);
+  for (const f of files) if (!f.patch) notes.push(`Diff unavailable: ${f.path}`);
+  for (const path2 of policies.skipped) notes.push(`Policy file missing or empty: ${path2}`);
   const agg = aggregate(files, labels, cfg, llm, { body: pr.body ?? null, user: pr.user ?? null, configPaths: o.configPaths });
   let findings = llm?.findings ?? [];
   if (llm && cfg.learning.enabled && o.learned?.length) {
@@ -59489,7 +59623,9 @@ async function produceReviewResult(o) {
     fileFindings: findings.filter((f) => f.line === void 0),
     breakdown: breakdown ?? void 0,
     approval: cfg.approval,
-    laneMap: cfg.review.lane_map
+    laneMap: cfg.review.lane_map,
+    prUrl: pr.html_url,
+    lineFindings: lineFindingsOf(findings)
   });
   return {
     schemaVersion: 1,
@@ -59785,9 +59921,9 @@ function manifestOf(lockfile) {
 // src/git.ts
 var import_node_child_process = require("node:child_process");
 var GitError = class extends Error {
-  constructor(message, code2, stderr) {
+  constructor(message, code3, stderr) {
     super(message);
-    this.code = code2;
+    this.code = code3;
     this.stderr = stderr;
   }
   code;
@@ -59812,11 +59948,11 @@ function runGit(args, o = {}) {
       if (err.reduce((n, b) => n + b.length, 0) < 64e3) err.push(d);
     });
     child.on("error", (e) => reject(new GitError(`could not run git: ${e.message}`, null, "")));
-    child.on("close", (code2) => {
+    child.on("close", (code3) => {
       const stderr = redact(scrubUrl(Buffer.concat(err).toString("utf8")));
       const sub = args[0] ?? "command";
-      if (over) return reject(new GitError(`git ${sub} output exceeded ${max} bytes`, code2, stderr));
-      const res = { code: code2 ?? -1, stdout: Buffer.concat(out).toString("utf8"), stderr };
+      if (over) return reject(new GitError(`git ${sub} output exceeded ${max} bytes`, code3, stderr));
+      const res = { code: code3 ?? -1, stdout: Buffer.concat(out).toString("utf8"), stderr };
       if (res.code !== 0 && !o.allowFail) return reject(new GitError(`git ${sub} failed (${res.code})`, res.code, stderr));
       resolve3(res);
     });
@@ -60255,9 +60391,9 @@ async function turnOn(c, pr, actor, how = "on", commentId) {
   const hist = await history(c, pr.number);
   const state = prev?.on ? prev : how === "retry" ? await setState(c, pr.number, hist, (s) => addEntry(addGrant({ ...s, on: true, status: "watching" }, { who: actor, at: nowIso(c), comment: commentId }), { at: nowIso(c), kind: "info", what: "Retry granted", changed: "nothing", result: `+1 fix attempt, by ${actor}` })) : await note(c, pr.number, hist, { kind: "info", what: how === "on" ? "Shepherd turned on" : "Shepherd resumed", changed: "nothing", result: `Watching, by ${actor}` }, { on: true, status: "watching" });
   c.log.info(`Shepherd ${how} for #${pr.number}.`);
-  const cap = capOf(c, state);
-  if (hist.attempts >= cap) {
-    await handOff(c, pr.number, { rule: RULE.L1, reason: `all ${cap} fix attempts are already used on this PR (${hist.attempts}/${cap}); the count comes from Shepherd's own commits and is never reset` });
+  const cap2 = capOf(c, state);
+  if (hist.attempts >= cap2) {
+    await handOff(c, pr.number, { rule: RULE.L1, reason: `all ${cap2} fix attempts are already used on this PR (${hist.attempts}/${cap2}); the count comes from Shepherd's own commits and is never reset` });
     return;
   }
   await conflictCheck(c, pr);
@@ -60643,8 +60779,8 @@ async function conflictCheck(c, prIn) {
   }
   const sc = c.cfg.shepherd, n = pr.number;
   const hist = await history(c, n);
-  const cap = capOf(c, await readState(c, n));
-  if (hist.attempts >= cap) return handOff(c, n, { rule: RULE.L1, reason: `all ${cap} fix attempts are used (${hist.attempts}/${cap}), so the merge conflict is left to a human` });
+  const cap2 = capOf(c, await readState(c, n));
+  if (hist.attempts >= cap2) return handOff(c, n, { rule: RULE.L1, reason: `all ${cap2} fix attempts are used (${hist.attempts}/${cap2}), so the merge conflict is left to a human` });
   if (!await checkoutHead(c.cwd, pr.head.ref, pr.head.sha)) {
     c.log.info(`Branch ${pr.head.ref} moved; skipping conflict work.`);
     return;
@@ -60661,7 +60797,7 @@ async function conflictCheck(c, prIn) {
     return true;
   };
   const finish = async (touched, lines) => {
-    const message = buildCommitMessage({ subject: `shepherd: resolve merge conflicts with ${pr.base.ref} (attempt ${attempt}/${cap})`, attempt, kind: "conflict" });
+    const message = buildCommitMessage({ subject: `shepherd: resolve merge conflicts with ${pr.base.ref} (attempt ${attempt}/${cap2})`, attempt, kind: "conflict" });
     const sha = await commitStaged(c.cwd, message, c.identity ?? DEFAULT_IDENTITY);
     const pushed = await pushHead(c.cwd, pr.head.ref, { token: c.token, serverUrl: c.serverUrl, onSecret: c.onSecret });
     if (pushed === "rejected") {
@@ -60670,7 +60806,7 @@ async function conflictCheck(c, prIn) {
       return;
     }
     c.log.info(`Pushed merge ${sha.slice(0, 7)} resolving conflicts with ${pr.base.ref}.`);
-    await note(c, n, await history(c, n), { kind: "conflict", what: `Conflicts with ${pr.base.ref}`, changed: touched.length ? `${touched.join(", ")} (${lines} lines)` : "clean merge of the base branch", result: `Attempt ${attempt}/${cap} pushed; waiting for CI`, commit: sha }, { status: "watching" });
+    await note(c, n, await history(c, n), { kind: "conflict", what: `Conflicts with ${pr.base.ref}`, changed: touched.length ? `${touched.join(", ")} (${lines} lines)` : "clean merge of the base branch", result: `Attempt ${attempt}/${cap2} pushed; waiting for CI`, commit: sha }, { status: "watching" });
   };
   try {
     const start = await startMerge(c.cwd, pr.base.ref, c.identity ?? DEFAULT_IDENTITY);

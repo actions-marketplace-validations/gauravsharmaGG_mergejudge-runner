@@ -15,7 +15,7 @@ import { createProvider, type LlmCallUsage, type WorkersAiBinding } from "./llm/
 import type { LlmProvider } from "./llm/provider.js";
 import { canUseTools } from "./llm/provider.js";
 import { filterPolicyPaths, loadPolicies, type Policies } from "./policy.js";
-import { CHECK_NAME, EMOJI, renderComment } from "./render.js";
+import { CHECK_NAME, EMOJI, lineFindingsOf, renderComment } from "./render.js";
 import { selectCriteria } from "./rubrics.js";
 import { excludeFromLlm, isMergeJudgeConfigPath } from "./rules.js";
 import { gatherContext, type ContextPiece, type ContextSource } from "./context.js";
@@ -43,6 +43,8 @@ export interface ReviewPr {
   labels?: { name: string }[];
   /** PR author as GitHub reports it (login, user type). Trusted, unlike the body; feeds pr_template / trusted_authors. */
   user?: { login?: string | null; type?: string | null } | null;
+  /** The PR's web URL; lets the sticky comment link to diff lines. */
+  html_url?: string;
 }
 
 export interface ReviewInput {
@@ -222,7 +224,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
     };
     agg.explanation = explainLane(agg);
     const body = renderComment({
-      agg, mode: "rules-only", tokensEstimate: 0, approval: cfg.approval, notes: [proposal ? "Head is a learning proposal branch — LLM skipped." : "Head is the learning branch — LLM skipped."],
+      agg, mode: "rules-only", tokensEstimate: 0, approval: cfg.approval, laneMap: cfg.review.lane_map, prUrl: pr.html_url, notes: [proposal ? "Head is a learning proposal branch — LLM skipped." : "Head is the learning branch — LLM skipped."],
     });
     return {
       schemaVersion: 1, kind: "learning-block", prNumber: number, headSha: pr.head.sha, prNodeId: pr.node_id,
@@ -236,7 +238,8 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
 
   if (o.skipAi) notes.push(o.skipAi);
   else if (o.providerNote && cfg.provider.type !== "none") notes.push(`LLM disabled (${(!provider && o.keyNote) || o.providerNote}); rules-only.`);
-  if (o.noProviderNote && !o.skipAi && cfg.provider.type === "none" && !provider) notes.push(o.noProviderNote);
+  // Another note (for example the hosted free-AI skip note) may already say why this run is rules-only; two reasons would contradict.
+  if (o.noProviderNote && !o.skipAi && cfg.provider.type === "none" && !provider && !notes.some((n) => /rules-only/i.test(n))) notes.push(o.noProviderNote);
   let llm = null;
   let policies: Policies = { text: "", used: [], skipped: [] };
   let tokens = 0;
@@ -314,6 +317,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
     let res = mode === "deep" && tools && canUseTools(provider)
       ? await runDeepTriage(provider, prompt, cfg, tctx, { tools }, log.info, log.warning)
       : await runTriage(provider, prompt, cfg, tctx, log.info, log.warning);
+    if (res.deep?.stopped) notes.push(`AI tool budget exhausted (${res.deep.stopped}); further exploration was not checked.`);
     // ai.mode deep: a second pass over the same numbered diff. Findings from that pass need a
     // verified quote. File lanes can only rise. Base-branch rules stay the floor inside aggregate.
     if (res.llm && aiModeOf(cfg) === "deep") {
@@ -347,6 +351,10 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
     }
   }
 
+  const excluded = excludeFromLlm(files, cfg.diff_exclude).skipped;
+  for (const path of excluded) notes.push(`Diff excluded from AI review: ${path}`);
+  for (const f of files) if (!f.patch) notes.push(`Diff unavailable: ${f.path}`);
+  for (const path of policies.skipped) notes.push(`Policy file missing or empty: ${path}`);
   const agg = aggregate(files, labels, cfg, llm, { body: pr.body ?? null, user: pr.user ?? null, configPaths: o.configPaths });
   // Known false alarms: hide or fold repeats of patterns reviewers keep dismissing. Lanes, labels and rubric stay as aggregated.
   let findings = llm?.findings ?? [];
@@ -361,7 +369,8 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
   const body = renderComment({
     agg, mode: llm && provider ? provider.label : "rules-only", tokensEstimate: tokens, notes,
     policyFiles: policies.used, fileFindings: findings.filter((f) => f.line === undefined),
-    breakdown: breakdown ?? undefined, approval: cfg.approval, laneMap: cfg.review.lane_map,
+    breakdown: breakdown ?? undefined, approval: cfg.approval, laneMap: cfg.review.lane_map, prUrl: pr.html_url,
+    lineFindings: lineFindingsOf(findings),
   });
   return {
     schemaVersion: 1, kind: "review", prNumber: number, headSha: pr.head.sha, prNodeId: pr.node_id,

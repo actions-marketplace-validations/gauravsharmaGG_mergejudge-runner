@@ -23,11 +23,11 @@ const marker = (key: string, state: "active" | "resolved", extra: Record<string,
 
 /** Message text of one of our inline comments (marker and prefix removed, markdown escapes undone). */
 export function findingText(body: string): string {
-  return body.replace(/\n*```suggestion\n[\s\S]*?\n```/g, "").replace(/<!--[\s\S]*?-->/g, "").replace(/^\s*(?:⚖️\s*)?\*\*MergeJudge \(LLM\):\*\*\s*/, "").replace(/\\([\\`*_{}\[\]()#+\-.!|<>~])/g, "$1").trim();
+  return body.replace(/\n*```suggestion\n[\s\S]*?\n```/g, "").replace(/<!--[\s\S]*?-->/g, "").replace(/^\s*(?:⚖️\s*)?\*\*MergeJudge \((?:LLM|AI)\):\*\*\s*/, "").replace(/\\([\\`*_{}\[\]()#+\-.!|<>~])/g, "$1").trim();
 }
 
 export function inlineBody(f: Finding & { line: number }, ctx: InlineCtx = {}): string {
-  return `${marker(keyOf(f.path, f.line), "active", { sha: tok(ctx.sha), rv: tok(ctx.reviewer) })}\n⚖️ **MergeJudge (LLM):** ${escapeMd(f.message)}${f.suggestion ? `\n\n\`\`\`suggestion\n${f.suggestion}\n\`\`\`` : ""}`;
+  return `${marker(keyOf(f.path, f.line), "active", { sha: tok(ctx.sha), rv: tok(ctx.reviewer) })}\n⚖️ **MergeJudge (AI):** ${escapeMd(f.message)}${f.suggestion ? `\n\n\`\`\`suggestion\n${f.suggestion}\n\`\`\`` : ""}`;
 }
 
 /**

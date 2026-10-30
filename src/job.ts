@@ -88,6 +88,7 @@ export async function produceResult(
   const pieces = local?.pieces ?? (p as RunnerJobPayload).context ?? [];
   const retrievedInfo = local ? { ok: true, notes: local.notes } : (p as RunnerJobPayload).deep;
   let bodyNotes: string[] = [];
+  const prUrl = `https://github.com/${p.repo.owner}/${p.repo.repo}/pull/${p.pr.number}`;
   const provider = new EngineProvider(picked.engine as EngineId, signal, { ...ctx.options(picked.engine as EngineId), model: picked.model });
   const result = await produceReviewResult({
     pr: {
@@ -96,6 +97,7 @@ export async function produceResult(
       base: { ...(p.pr.base.ref ? { ref: p.pr.base.ref } : {}), ...(p.pr.base.sha ? { sha: p.pr.base.sha } : {}) },
       labels: p.pr.labels.map((name) => ({ name })),
       user: { login: p.pr.author ?? null, type: p.pr.authorType ?? null },
+      html_url: prUrl,
     },
     cfg, cfgRef: p.cfgRef, files, provider,
     ...(Array.isArray(p.learnedLines) ? { learnedLines: p.learnedLines.filter((l): l is string => typeof l === "string").slice(0, 40) } : {}), onNotes: (n) => { bodyNotes = n; },
@@ -112,7 +114,7 @@ export async function produceResult(
   }
   result.usage = { ...result.usage, model: provider.label, engine: picked.engine, engineModel: picked.model, billing: ENGINE_BILLING[picked.engine as EngineName] };
   if (local?.secrets.hits.size) {
-    const n = applyRunnerSecretHits(result, local.secrets.hits, { policyFiles: p.policy.used, notes: bodyNotes, approval: p.cfg.approval });
+    const n = applyRunnerSecretHits(result, local.secrets.hits, { policyFiles: p.policy.used, notes: bodyNotes, approval: p.cfg.approval, laneMap: p.cfg.review.lane_map, prUrl });
     if (n) log.warn("local secret scan raised file(s) to block", { job: job.id, files: n });
   }
   return { result, calls: provider.calls, engine: { engine: picked.engine, model: picked.model } };

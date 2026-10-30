@@ -110,6 +110,26 @@ const DEFAULT_PR_TEMPLATE: { enabled: boolean; sections: string[]; min_chars: nu
   enabled: false, sections: DEFAULT_PR_TEMPLATE_SECTIONS, min_chars: 15, apply_to: "agents", missing_lane: "review",
 };
 
+export const DEFAULT_SHEPHERD = { enabled: true, max_attempts: 3, max_fix_lines: 50, max_fix_files: 3, protected_paths: [] as string[], suggestions: true };
+/**
+ * Shepherd (watch and auto-fix). Like all policy this is read from the BASE branch, never the PR head, so a PR cannot
+ * loosen its own guardrails. `enabled` only means the repo allows Shepherd to be turned on per PR (comment or label).
+ */
+const shepherdSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    /** Fix attempts per PR before Shepherd posts a summary and stops. */
+    max_attempts: z.number().int().min(1).max(10).default(3),
+    /** Largest fix Shepherd will push: changed lines (added + removed) and files per attempt. Bigger is handed off (H2). */
+    max_fix_lines: z.number().int().min(1).max(500).default(50),
+    max_fix_files: z.number().int().min(1).max(20).default(3),
+    /** Extra globs Shepherd never edits, added to the built-in protected paths (core/shepherd.ts). */
+    protected_paths: z.array(z.string()).default([]),
+    /** Tier 1: inline review comments carry "suggested changes" while Shepherd is on for the PR. */
+    suggestions: z.boolean().default(true),
+  })
+  .default(DEFAULT_SHEPHERD);
+
 export const configSchema = z.object({
   provider: providerSchema,
   lanes: z
@@ -152,6 +172,18 @@ export const configSchema = z.object({
       lane_map: z.boolean().default(false),
     })
     .default({ mode: "diff", lane_map: false }),
+  /**
+   * How many model passes run over the diff. `fast` (default) is the single pass.
+   * `deep` adds a second pass for cross-hunk, concurrency, security, data and API defects.
+   * Second-pass findings are kept only when their quote matches the diff. This is separate from
+   * `review.mode`, which chooses how much surrounding code is attached to the prompt.
+   * Deterministic base-branch rules stay the floor. auto means low risk, not a guarantee.
+   */
+  ai: z
+    .object({
+      mode: z.enum(["fast", "deep"]).default("fast"),
+    })
+    .default({ mode: "fast" }),
   context: z
     .object({
       max_bytes: z.number().int().positive().default(40_000),
@@ -200,6 +232,7 @@ export const configSchema = z.object({
       missing_lane: z.enum(["review", "block"]).default("review"),
     })
     .default(DEFAULT_PR_TEMPLATE),
+  shepherd: shepherdSchema,
   /** Repo guidance files from the base tip. Empty list disables policy injection. */
   policy_files: z.array(z.string()).max(10).default(DEFAULT_POLICY_FILES),
   /** Globs of policy paths to skip even if listed in policy_files. */

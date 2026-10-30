@@ -20,6 +20,10 @@ import { selectCriteria } from "./rubrics.js";
 import { excludeFromLlm, isMergeJudgeConfigPath } from "./rules.js";
 import { gatherContext, type ContextPiece, type ContextSource } from "./context.js";
 import { DELIM, runTriage, type Finding, type TokenBreakdown, type TriageResult } from "./triage.js";
+import { reviewGuard } from "./shepherdhandoff.js";
+import { addEntry, isProtectedPath, isShepherdOn, newShepherdState, upsertShepherdComment } from "./shepherd.js";
+import { runSecondPass } from "../src/ai.js";
+import { aiModeOf } from "../src/deep.js";
 
 /** Rules-only note when the model call or its JSON could not be used. The class only: no provider body, no model text. */
 export function aiUnavailableNote(errorClass: string, truncated = false): string {
@@ -93,6 +97,8 @@ export interface ReviewInput {
    */
   retrieveDeep?: (kept: PrFile[]) => Promise<{ pieces: ContextPiece[]; notes: string[] }>;
   log: { info: (m: string) => void; warning: (m: string) => void };
+  /** Shepherd L3: the review flagged lines in files Shepherd's own head commit touched. Called instead of posting inline findings. */
+  onShepherdPingPong?: (findings: Finding[], touchedFiles: string[]) => Promise<void>;
   /**
    * Optional cache of the LLM result for this PR head (the Worker uses KV). On a hit the LLM is not
    * called and inline findings are left as they are; lanes, labels, summary, check and approval are
@@ -148,6 +154,8 @@ export interface ReviewResult {
   findings: Finding[];
   /** True when inline findings should be synced (fresh LLM result, not a cache hit). */
   syncInline: boolean;
+  /** Shepherd tier 1 was on for this review (label + config); only present when true. */
+  shepherd?: boolean;
   usage: ReviewOutcome & { tokens: number };
 }
 
@@ -190,6 +198,8 @@ export interface ProduceInput {
   learnedLines?: string[];
   log: ReviewInput["log"];
   llmCache?: ReviewInput["llmCache"];
+  /** Shepherd L5: the head commit is one of Shepherd's own fix commits (no suggestions, no new inline findings). */
+  shepherdCommit?: boolean;
   /** Receives the notes rendered into the comment body, so a caller that re-renders the body (runner secret scan) can keep them. */
   onNotes?: (notes: string[]) => void;
 }
@@ -224,6 +234,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
   }
 
   const labels: string[] = (pr.labels ?? []).map((l: { name: string }) => l.name);
+  const shepherdOn = isShepherdOn(labels) && cfg.shepherd.enabled && cfg.shepherd.suggestions && !o.shepherdCommit;
 
   if (o.skipAi) notes.push(o.skipAi);
   else if (o.providerNote && cfg.provider.type !== "none") notes.push(`LLM disabled (${(!provider && o.keyNote) || o.providerNote}); rules-only.`);
@@ -302,11 +313,29 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
       context = g.pieces;
     }
     const prompt = { title: pr.title ?? "", body: pr.body ?? "", files: kept, context };
-    const tctx = { policyText: policies.text, criteria, learnedText: cfg.learning.enabled ? (o.learnedLines ? renderLearnedSection(o.learnedLines, DELIM) : buildLearnedContext({ learned: o.learned, lessons: o.lessons, outcomeStats: o.outcomeStats }, DELIM)) : "", skippedDiffFiles: skipped, ref: o.ref ?? `#${pr.number}` };
-    const res = mode === "deep" && tools && canUseTools(provider)
+    const tctx = { ...(shepherdOn ? { suggestions: (p: string) => !isProtectedPath(p, cfg) } : {}), policyText: policies.text, criteria, learnedText: cfg.learning.enabled ? (o.learnedLines ? renderLearnedSection(o.learnedLines, DELIM) : buildLearnedContext({ learned: o.learned, lessons: o.lessons, outcomeStats: o.outcomeStats }, DELIM)) : "", skippedDiffFiles: skipped, ref: o.ref ?? `#${pr.number}` };
+    let res = mode === "deep" && tools && canUseTools(provider)
       ? await runDeepTriage(provider, prompt, cfg, tctx, { tools }, log.info, log.warning)
       : await runTriage(provider, prompt, cfg, tctx, log.info, log.warning);
     if (res.deep?.stopped) notes.push(`AI tool budget exhausted (${res.deep.stopped}); further exploration was not checked.`);
+    // ai.mode deep: a second pass over the same numbered diff. Findings from that pass need a
+    // verified quote. File lanes can only rise. Base-branch rules stay the floor inside aggregate.
+    if (res.llm && aiModeOf(cfg) === "deep") {
+      const second = await runSecondPass(provider, prompt, cfg, tctx, res.llm, log.info);
+      if (second.note) notes.push(second.note);
+      log.info(second.logLine);
+      res = {
+        ...res,
+        llm: second.llm,
+        tokensEstimate: res.tokensEstimate + second.tokensEstimate,
+        breakdown: {
+          ...res.breakdown,
+          output: res.breakdown.output + second.outputTokens,
+          total: res.breakdown.total + second.tokensEstimate,
+          second_pass: second.tokensEstimate,
+        },
+      };
+    }
     usedMode = retrievedDeep ? "deep" : mode;
     tokens = res.tokensEstimate;
     llm = res.llm;
@@ -345,7 +374,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
   });
   return {
     schemaVersion: 1, kind: "review", prNumber: number, headSha: pr.head.sha, prNodeId: pr.node_id,
-    lane: agg.lane, agg, body, findings, syncInline: !!llm && !cached,
+    lane: agg.lane, agg, body, findings, syncInline: !!llm && !cached && !o.shepherdCommit, ...(shepherdOn ? { shepherd: true } : {}),
     usage: {
       lane: agg.lane, mode: llm && provider ? usedMode : "rules-only", model: provider?.label ?? null,
       cached: !!cached, breakdown, tokens,
@@ -397,6 +426,18 @@ export async function postReviewResult(r: ReviewResult, c: PostContext): Promise
     try {
       const plan = await syncInlineFindings(ok, repo, r.prNumber, r.headSha, r.findings, log.warning, log.info, `${r.usage.mode}:${r.usage.model ?? "rules-only"}`);
       log.info(`Inline findings: ${plan.create.length} new, ${plan.update.length} updated/resolved.`);
+      if (r.shepherd) {
+        const n = [...plan.create, ...plan.update].filter((x) => x.body.includes("```suggestion\n")).length;
+        if (n) {
+          try {
+            const at = new Date().toISOString();
+            await upsertShepherdComment(ok, repo, r.prNumber, (prev) => addEntry(
+              prev ?? newShepherdState(cfg.shepherd.max_attempts),
+              { at, kind: "suggestion", what: "Review findings with a clear one-line fix", changed: `${n} suggested change${n === 1 ? "" : "s"} posted on review comments`, result: "Waiting for a human to commit them" },
+            ));
+          } catch (e) { log.warning(`Could not update the Shepherd comment: ${(e as Error).message}`); }
+        }
+      }
     } catch (e) {
       log.warning(`Could not post inline findings: ${(e as Error).message}`);
     }
@@ -437,13 +478,30 @@ export async function runReview(o: ReviewInput): Promise<"auto" | "review" | "bl
   const skipAi = learning ? undefined : o.skipAi ?? o.skipAiGate?.(files) ?? undefined;
   const reviewNotes = unlisted && !skipAi ? [...(o.reviewNotes ?? []), `This PR has more than ${o.maxListFiles} files; only the first ${o.maxListFiles} were checked and the lane is at least review.`] : o.reviewNotes;
   const { provider, note } = learning || skipAi ? { provider: null, note: undefined } : createProvider(cfg.provider, env, { ...o.bindings, onCall: o.onLlmCall });
+  // Shepherd L5/L3: look at the head commit only when Shepherd is on for this PR.
+  const guarded = !learning && cfg.shepherd.enabled && isShepherdOn(pr.labels);
+  let head: { message: string; files: string[] } | null = null;
+  if (guarded) {
+    try {
+      const c = await ok.rest.repos.getCommit({ ...repo, ref: pr.head.sha });
+      head = { message: c.data.commit.message, files: (c.data.files ?? []).map((f) => f.filename) };
+    } catch (e) { o.log.warning(`Could not read the head commit for Shepherd: ${(e as Error).message}`); }
+  }
+  const shepherdCommit = !!head && !reviewGuard(head.message, [], []).syncInline;
   const result = await produceReviewResult({
+    shepherdCommit,
     ref: `${repo.owner}/${repo.repo}#${pr.number}`,
     pr, cfg, cfgRef, files, configPaths: o.configPaths, provider, providerNote: note, keyNote: o.keyNote, noProviderNote: o.noProviderNote, reviewNotes, skipAi,
     readRepoFile: (p, ref) => fetchRepoFile(ok, repo, p, ref),
     contextSource: o.contextSource ?? githubContextSource(ok, repo, pr.head.sha),
     deep: o.deep, retrieveDeep: o.retrieveDeep, learned: o.learned, lessons: o.lessons, outcomeStats: o.outcomeStats, log: o.log, llmCache: o.llmCache,
   });
+  if (shepherdCommit && head) {
+    const g = reviewGuard(head.message, head.files, result.findings);
+    if (g.pingPong.length && o.onShepherdPingPong) {
+      try { await o.onShepherdPingPong(g.pingPong, head.files); } catch (e) { o.log.warning(`Shepherd hand-off failed: ${(e as Error).message}`); }
+    }
+  }
   return postReviewResult(result, {
     ok, repo, cfg, appToken: o.appToken, botLogin: o.botLogin, configPaths: o.configPaths, log: o.log, onResult: o.onResult, onSnapshot: o.onSnapshot,
   });

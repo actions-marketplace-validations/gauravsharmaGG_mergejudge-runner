@@ -43,7 +43,16 @@ export interface PromptContext {
   learnedText?: string;
   /** "owner/repo#pr", for log lines. */
   ref?: string;
+  /**
+   * Shepherd tier 1: when set, the prompt also asks for an optional one-line `suggestion` per finding, and a suggestion is kept
+   * only when this returns true for the finding's path (not protected). Unset (the default) leaves prompt and findings unchanged.
+   */
+  suggestions?: (path: string) => boolean;
 }
+
+export const SUGGESTION_RULES = `Suggested changes: for a finding that has a "line" and a "quote", you may add an optional "suggestion" field to that finding: the exact replacement text for that one line (the line the quote is on), only when you are sure of a small, safe, local fix. It replaces just that single line; it may contain newlines if one line becomes several. Omit "suggestion" whenever the fix is not that simple. Never put code fences in it.`;
+
+export const MAX_SUGGESTION_CHARS = 2000;
 
 /** System prompt = base rules + optional trusted repo policy + optional rubric criteria. */
 export function buildSystemPrompt(ctx: PromptContext = {}): string {
@@ -55,6 +64,7 @@ export function buildSystemPrompt(ctx: PromptContext = {}): string {
     );
   }
   if (ctx.learnedText?.trim()) parts.push(ctx.learnedText.trim());
+  if (ctx.suggestions) parts.push(SUGGESTION_RULES);
   if (ctx.criteria?.length) {
     parts.push(
       `Also score this rubric. Add a top-level "rubric" array to the JSON: [{"id": "<criterion id>", "result": "pass" | "fail" | "n/a" | <1-5 for scored criteria>, "justification": "<one sentence>", "evidence": {"path": "<file>", "line": <new-file line>, "quote": "<exact text copied from the diff>"}}]. Evidence with an exact quote is REQUIRED for "fail" and for scores of 1-2; without it the result is ignored. Use "n/a" when the criterion does not apply. Criteria:\n${criteriaPrompt(ctx.criteria)}`,
@@ -106,6 +116,8 @@ export interface TokenBreakdown {
   tools?: number;
   /** Deep mode: number of tool calls made. */
   tool_calls?: number;
+  /** `ai.mode: deep` only: estimated tokens of the second pass (prompt + reply). */
+  second_pass?: number;
   output: number;
   total: number;
   skipped_diff_files: string[];
@@ -171,7 +183,7 @@ const laneEnum = z.enum(["auto", "review", "block"]);
 export const triageOutputSchema = z.object({
   summary: z.string(),
   files: z.array(z.object({ path: z.string(), lane: laneEnum, reason: z.string().default(""),
-    findings: z.array(z.object({ line: z.coerce.number().int(), quote: z.string().optional(), message: z.string() })).max(50).default([]),
+    findings: z.array(z.object({ line: z.coerce.number().int(), quote: z.string().optional(), message: z.string(), suggestion: z.string().optional() })).max(50).default([]),
   })),
   rubric: rubricOutputSchema,
 });
@@ -179,7 +191,8 @@ export type TriageOutput = z.infer<typeof triageOutputSchema>;
 
 export function parseTriageOutput(raw: string): TriageOutput {
   let t = raw.trim();
-  const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  // A reply that already starts with "{" is bare JSON: a ``` inside one of its strings (e.g. a suggestion) is not a fence.
+  const fence = t.startsWith("{") ? null : t.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (fence?.[1]) t = fence[1].trim();
   const a = t.indexOf("{");
   const b = t.lastIndexOf("}");
@@ -254,11 +267,35 @@ export interface Finding {
   /** Diff line the finding rests on; present only when it verified (otherwise `line` is dropped). */
   quote?: string;
   message: string;
+  /** Shepherd tier 1: replacement for exactly the line above (may hold newlines). Only on a verified `line`, never on a protected path. */
+  suggestion?: string;
+}
+
+/** New-side line texts of a patch (added + context lines, without the diff prefix). */
+function newSideText(patch: string | undefined): Map<number, string> {
+  const out = new Map<number, string>();
+  let n = 0;
+  let inHunk = false;
+  for (const line of (patch ?? "").split("\n")) {
+    const h = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (h) { n = Number(h[1]); inHunk = true; continue; }
+    if (!inHunk || line.startsWith("\\") || line.startsWith("-")) continue;
+    out.set(n++, line.slice(1));
+  }
+  return out;
+}
+
+/** The suggestion to keep, or undefined: it must differ from the current line, be short and fence-free. */
+export function keepSuggestion(raw: string | undefined, current: string | undefined): string | undefined {
+  if (raw === undefined || current === undefined) return undefined;
+  const s = raw.replace(/\r\n?/g, "\n").replace(/\n$/, "");
+  if (!s.trim() || s.length >= MAX_SUGGESTION_CHARS || s.includes("```")) return undefined;
+  return s.trimEnd() === current.replace(/\r$/, "").trimEnd() ? undefined : s;
 }
 
 export const MAX_FINDINGS = 20;
 
-export function validateAgainstFiles(out: TriageOutput, files: PrFile[], criteria: Criterion[] = []): LlmTriage {
+export function validateAgainstFiles(out: TriageOutput, files: PrFile[], criteria: Criterion[] = [], suggestions?: (path: string) => boolean): LlmTriage {
   const known = new Set(files.map((f) => f.path));
   const map = new Map<string, { lane: Lane; reason: string }>();
   for (const f of out.files) {
@@ -275,6 +312,7 @@ export function validateAgainstFiles(out: TriageOutput, files: PrFile[], criteri
     const pf = byPath.get(f.path);
     if (!pf) continue;
     const valid = diffLines(pf.patch);
+    const text = suggestions?.(f.path) ? newSideText(pf.patch) : undefined;
     for (const x of f.findings) {
       const message = x.message.trim().slice(0, 300);
       if (!message) continue;
@@ -284,7 +322,8 @@ export function validateAgainstFiles(out: TriageOutput, files: PrFile[], criteri
       const key = `${f.path}:${line ?? "file"}:${message}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      findings.push({ path: f.path, ...(line !== undefined ? { line, quote } : {}), message });
+      const suggestion = line !== undefined && text ? keepSuggestion(x.suggestion, text.get(line)) : undefined;
+      findings.push({ path: f.path, ...(line !== undefined ? { line, quote } : {}), message, ...(suggestion !== undefined ? { suggestion } : {}) });
     }
   }
   return { summary: out.summary.slice(0, 600), files: map, findings: findings.slice(0, MAX_FINDINGS),
@@ -375,7 +414,7 @@ export async function runTriage(
         if (!repair) { firstTruncated = r.truncated; firstOut = r.outputTokens ?? estimateTokens(raw); }
         let llm: LlmTriage;
         try {
-          llm = validateAgainstFiles(parseTriageOutput(raw), input.files, ctx.criteria ?? []);
+          llm = validateAgainstFiles(parseTriageOutput(raw), input.files, ctx.criteria ?? [], ctx.suggestions);
         } catch (pe) {
           if (!r.truncated) throw pe;
           throw new LlmError("parse", { provider: provider.providerId });

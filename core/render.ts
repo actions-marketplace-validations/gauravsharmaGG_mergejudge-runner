@@ -53,7 +53,7 @@ export interface RenderInput {
   /** The PR's web URL (html_url). Enables links to diff lines; without it locations are plain `path:line` text. */
   prUrl?: string;
   policyFiles?: { path: string; truncated: boolean }[];
-  breakdown?: { system: number; policy: number; rubric: number; diff: number; context?: number; tools?: number; tool_calls?: number; output: number; total: number };
+  breakdown?: { system: number; policy: number; rubric: number; diff: number; context?: number; tools?: number; tool_calls?: number; second_pass?: number; output: number; total: number };
   /** The repo config's approval settings; the footer mentions auto-merge only when enabled with mode auto-merge-only. */
   approval?: { enabled?: boolean; mode?: string } | null;
   /** review.lane_map (default off): add the folder table (big PRs) and image/panel link to the Files section. Explanatory only; never changes the lane. */
@@ -369,7 +369,7 @@ export function renderComment(r: RenderInput): string {
     `<sub>Mode: ${escapeMd(r.mode)}` +
       (r.policyFiles?.length ? ` · Policy: ${r.policyFiles.map((p) => escapeMd(p.path) + (p.truncated ? " (truncated)" : "")).join(", ")}` : "") +
       (r.breakdown
-        ? ` · tokens system ${r.breakdown.system}/policy ${r.breakdown.policy}/rubric ${r.breakdown.rubric}/diff ${r.breakdown.diff}${r.breakdown.context ? `/context ${r.breakdown.context}` : ""}${r.breakdown.tools ? `/tools ${r.breakdown.tools} (${r.breakdown.tool_calls ?? 0} calls)` : ""}/out ${r.breakdown.output}`
+        ? ` · tokens system ${r.breakdown.system}/policy ${r.breakdown.policy}/rubric ${r.breakdown.rubric}/diff ${r.breakdown.diff}${r.breakdown.context ? `/context ${r.breakdown.context}` : ""}${r.breakdown.tools ? `/tools ${r.breakdown.tools} (${r.breakdown.tool_calls ?? 0} calls)` : ""}${r.breakdown.second_pass ? `/second ${r.breakdown.second_pass}` : ""}/out ${r.breakdown.output}`
         : "") +
       "</sub>",
     "",

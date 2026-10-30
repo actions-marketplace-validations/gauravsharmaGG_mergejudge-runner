@@ -36,7 +36,7 @@ export async function generateStory(provider: LlmProvider, o: {
     const request = completeWithMeta(provider, {
       system: STORY_SYSTEM_PROMPT,
       user: `Diff:\n<${DELIM}>\n${sanitizeUntrusted(diff)}\n</${DELIM}>\nFinal findings:\n<${DELIM}>\n${sanitizeUntrusted(findings)}\n</${DELIM}>`,
-      jsonMode: true, maxOutputTokens: 700, budgetMs: STORY_TIMEOUT_MS, maxRetries: 0, outputSchema: STORY_OUTPUT_SCHEMA,
+      jsonMode: true, maxOutputTokens: 1200, budgetMs: STORY_TIMEOUT_MS, maxRetries: 0, outputSchema: STORY_OUTPUT_SCHEMA,
     });
     const result = await Promise.race([request, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), STORY_TIMEOUT_MS); })]);
     if (result.truncated) throw new Error("truncated");

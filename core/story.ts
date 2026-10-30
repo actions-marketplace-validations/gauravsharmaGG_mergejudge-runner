@@ -161,7 +161,7 @@ export function renderStorySection(story: Story, animate = true, style: "svg" | 
   return [
     "<details><summary>What this PR does (AI-drawn, may be incomplete)</summary>", "",
     ...(chart && style === "mermaid" ? ["```mermaid", storyMermaid(story, animate), "```", ""] :
-      chart && image ? [`<img src="${image}" alt="PR story: ${sanitizeStoryText(story.steps.map(s => s.title).join("; "), 350).replace(/'/g, "&#39;")}" width="440">`, ""] : []),
+      chart && image ? [`<img src="${image}" alt="PR story: ${sanitizeStoryText(story.steps.map(s => s.title).join(". "), 350).replace(/'/g, "&#39;")}" width="440">`, ""] : []),
     `Steps: ${story.steps.map((s, i) => `${i + 1}. ${s.title}${s.change === "changed" && s.before && s.after ? ` (${s.before} -> ${s.after})` : ""}`).join("; ")}`,
     "", "</details>", "",
   ];

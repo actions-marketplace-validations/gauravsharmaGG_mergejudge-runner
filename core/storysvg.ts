@@ -121,9 +121,16 @@ function legend(x: number, y: number, W: number) {
 }
 function header(story: Normal, W: number) {
   const c = story.steps.filter((s) => s.change === 'changed').length, n = story.steps.filter((s) => s.change === 'new').length;
-  let s = `<text x="20" y="31" class="h">${esc(story.title.toUpperCase())}</text>`;
   const parts = [`${story.steps.length} steps`]; if (c) parts.push(`${c} changed`); if (n) parts.push(`${n} new`);
-  s += `<text x="${W - 20}" y="31" class="lg" text-anchor="end">${esc(parts.join(' · '))}</text>`;
+  const count = parts.join(' · ');
+  // The title shares the row with the count. If it does not fit next to it, the count (which the
+  // legend already implies) is dropped and the title gets the full row, with an ellipsis if needed.
+  const upper = story.title.toUpperCase();
+  const room = W - 40 - textW(count, 11) - 24;
+  const withCount = textW(upper, 12, true) <= room;
+  const title = withCount ? upper : (wrap(upper, W - 40, 12, 1, true)[0] ?? '');
+  let s = `<text x="20" y="31" class="h">${esc(title)}</text>`;
+  if (withCount) s += `<text x="${W - 20}" y="31" class="lg" text-anchor="end">${esc(count)}</text>`;
   return s;
 }
 

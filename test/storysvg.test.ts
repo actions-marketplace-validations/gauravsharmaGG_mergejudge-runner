@@ -62,4 +62,13 @@ describe("subway SVG", () => {
     const narrow = renderStorySvg({ ...story, steps: story.steps.map(s => ({ ...s, title: "W".repeat(48) })) }, { width: 280 });
     expect(narrow).toContain("…"); checkXml(narrow);
   });
+  it("keeps a long title clear of the step count on the header row", () => {
+    const head = (svg: string) => svg.match(/<text x="20" y="31" class="h">([^<]*)<\/text>/)![1]!;
+    const short = renderStorySvg({ ...story, title: "Stricter input checks" }, { width: 440 });
+    expect(head(short)).toBe("STRICTER INPUT CHECKS");
+    expect(short).toContain(">3 steps · 1 changed · 1 new<");
+    const long = renderStorySvg({ ...story, title: "Make total and sum stricter about every kind of input in the module" }, { width: 440 });
+    expect(head(long).endsWith("\u2026")).toBe(true);
+    expect(long).not.toContain("3 steps");
+  });
 });

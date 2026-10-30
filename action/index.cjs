@@ -54905,7 +54905,7 @@ function renderStorySection(story, animate = true, style = "svg", imageUrl, char
   return [
     "<details><summary>What this PR does (AI-drawn, may be incomplete)</summary>",
     "",
-    ...chart && style === "mermaid" ? ["```mermaid", storyMermaid(story, animate), "```", ""] : chart && image ? [`<img src="${image}" alt="PR story: ${sanitizeStoryText(story.steps.map((s) => s.title).join("; "), 350).replace(/'/g, "&#39;")}" width="440">`, ""] : [],
+    ...chart && style === "mermaid" ? ["```mermaid", storyMermaid(story, animate), "```", ""] : chart && image ? [`<img src="${image}" alt="PR story: ${sanitizeStoryText(story.steps.map((s) => s.title).join(". "), 350).replace(/'/g, "&#39;")}" width="440">`, ""] : [],
     `Steps: ${story.steps.map((s, i) => `${i + 1}. ${s.title}${s.change === "changed" && s.before && s.after ? ` (${s.before} -> ${s.after})` : ""}`).join("; ")}`,
     "",
     "</details>",
@@ -59581,7 +59581,7 @@ Final findings:
 ${sanitizeUntrusted(findings)}
 </${DELIM}>`,
       jsonMode: true,
-      maxOutputTokens: 700,
+      maxOutputTokens: 1200,
       budgetMs: STORY_TIMEOUT_MS,
       maxRetries: 0,
       outputSchema: STORY_OUTPUT_SCHEMA
@@ -59733,11 +59733,16 @@ function legend(x, y, W) {
 }
 function header(story, W) {
   const c = story.steps.filter((s2) => s2.change === "changed").length, n = story.steps.filter((s2) => s2.change === "new").length;
-  let s = `<text x="20" y="31" class="h">${esc2(story.title.toUpperCase())}</text>`;
   const parts = [`${story.steps.length} steps`];
   if (c) parts.push(`${c} changed`);
   if (n) parts.push(`${n} new`);
-  s += `<text x="${W - 20}" y="31" class="lg" text-anchor="end">${esc2(parts.join(" \xB7 "))}</text>`;
+  const count = parts.join(" \xB7 ");
+  const upper = story.title.toUpperCase();
+  const room = W - 40 - textW(count, 11) - 24;
+  const withCount = textW(upper, 12, true) <= room;
+  const title = withCount ? upper : wrap(upper, W - 40, 12, 1, true)[0] ?? "";
+  let s = `<text x="20" y="31" class="h">${esc2(title)}</text>`;
+  if (withCount) s += `<text x="${W - 20}" y="31" class="lg" text-anchor="end">${esc2(count)}</text>`;
   return s;
 }
 function pulseAnim(pts, period, travel, begin) {

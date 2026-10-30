@@ -2,7 +2,7 @@ import { escapeMd } from "./render.js";
 import { RULE, RULE_STATUS, RULE_TITLE, type RuleId } from "./shepherdrules.js";
 import { isShepherdCommitMessage, type AttemptRecord, type Fingerprint } from "./shepherdfail.js";
 import type { Finding } from "./triage.js";
-import { redact } from "../src/redact.js";
+import { redact } from "./redact.js";
 
 export const HANDOFF_MARKER = "<!-- mergejudge:shepherd-handoff -->";
 export const NEEDS_HUMAN_LABEL = "needs-human";

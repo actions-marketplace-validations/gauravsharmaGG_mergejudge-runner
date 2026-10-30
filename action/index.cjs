@@ -58955,7 +58955,7 @@ function isGreen(checkRuns, laneCheckName) {
   return others.length > 0 && others.every((c) => c.status === "completed" && ["success", "skipped", "neutral"].includes(c.conclusion ?? ""));
 }
 
-// src/redact.ts
+// core/redact.ts
 var PATTERNS = [
   /mjr_[ea]_[A-Za-z0-9_-]{6,}/g,
   // MergeJudge runner / enrollment tokens
@@ -59277,38 +59277,9 @@ async function upsertShepherdComment(ok, r, pull, next, selfLogin) {
   return merged;
 }
 
-// src/config.ts
-var ConfigError = class extends Error {
-};
-
-// src/deep.ts
+// core/aimode.ts
 function aiModeOf(cfg) {
   return cfg?.ai?.mode === "deep" ? "deep" : "fast";
-}
-function withAiMode(cfg, mode) {
-  if (cfg.ai?.mode === mode) return cfg;
-  return { ...cfg, ai: { ...cfg.ai ?? {}, mode } };
-}
-function parseReviewMode(raw, label = "review mode") {
-  if (raw === void 0 || raw === null) return void 0;
-  const v = raw.trim().toLowerCase();
-  if (!v) return void 0;
-  if (v === "fast" || v === "deep") return v;
-  throw new ConfigError(`${label} must be fast or deep (got ${JSON.stringify(raw.trim().slice(0, 40))})`);
-}
-function explicitReviewMode(s = {}) {
-  const flag = parseReviewMode(s.flag, "--mode");
-  if (s.deepFlag && flag === "fast") throw new ConfigError("--deep conflicts with --mode fast");
-  if (s.deepFlag) return "deep";
-  if (flag) return flag;
-  const input2 = parseReviewMode(s.reviewMode, "review_mode");
-  if (input2) return input2;
-  const env = s.env ?? {};
-  const fromMerge = parseReviewMode(env.MERGEJUDGE_MODE, "MERGEJUDGE_MODE");
-  if (fromMerge) return fromMerge;
-  const fromInputEnv = parseReviewMode(env.INPUT_REVIEW_MODE, "INPUT_REVIEW_MODE");
-  if (fromInputEnv) return fromInputEnv;
-  return void 0;
 }
 function verifyFindingEvidence(finding, files) {
   const path2 = finding.path?.trim() ?? "";
@@ -59323,7 +59294,7 @@ function verifyFindingEvidence(finding, files) {
   return { path: file2.path, line, quote, message };
 }
 
-// src/ai.ts
+// core/secondpass.ts
 var SECOND_PASS_RULES = `Second pass (ai.mode deep). The numbered diff is the only evidence that a finding may cite. Look for defects a single hunk can hide: cross-hunk logic, concurrency, security, data loss and API contract breaks. Before you report a finding, try to falsify it from the diff: a guard on another line, a type that makes the bug impossible, or a change that is only style or wording. Report it only when you cannot falsify it.
 Each finding MUST include "quote" copied verbatim from that file's diff, without the L<n> prefix. A finding whose quote is not in the diff is dropped and does not count. Do not repeat a finding you were already shown. You may only raise a file lane (auto, review, block). You cannot lower one. auto means low risk, not a guarantee. Deterministic base-branch rules remain the floor.
 Respond with ONLY strict JSON, no prose, no code fences:
@@ -60876,6 +60847,37 @@ async function conflictCheck(c, prIn) {
 }
 async function npmAvailable(cwd) {
   return (await sh("npm --version", cwd)).code === 0;
+}
+
+// src/config.ts
+var ConfigError = class extends Error {
+};
+
+// src/deep.ts
+function withAiMode(cfg, mode) {
+  if (cfg.ai?.mode === mode) return cfg;
+  return { ...cfg, ai: { ...cfg.ai ?? {}, mode } };
+}
+function parseReviewMode(raw, label = "review mode") {
+  if (raw === void 0 || raw === null) return void 0;
+  const v = raw.trim().toLowerCase();
+  if (!v) return void 0;
+  if (v === "fast" || v === "deep") return v;
+  throw new ConfigError(`${label} must be fast or deep (got ${JSON.stringify(raw.trim().slice(0, 40))})`);
+}
+function explicitReviewMode(s = {}) {
+  const flag = parseReviewMode(s.flag, "--mode");
+  if (s.deepFlag && flag === "fast") throw new ConfigError("--deep conflicts with --mode fast");
+  if (s.deepFlag) return "deep";
+  if (flag) return flag;
+  const input2 = parseReviewMode(s.reviewMode, "review_mode");
+  if (input2) return input2;
+  const env = s.env ?? {};
+  const fromMerge = parseReviewMode(env.MERGEJUDGE_MODE, "MERGEJUDGE_MODE");
+  if (fromMerge) return fromMerge;
+  const fromInputEnv = parseReviewMode(env.INPUT_REVIEW_MODE, "INPUT_REVIEW_MODE");
+  if (fromInputEnv) return fromInputEnv;
+  return void 0;
 }
 
 // src/security.ts

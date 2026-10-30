@@ -22,8 +22,8 @@ import { gatherContext, type ContextPiece, type ContextSource } from "./context.
 import { DELIM, runTriage, type Finding, type TokenBreakdown, type TriageResult } from "./triage.js";
 import { reviewGuard } from "./shepherdhandoff.js";
 import { addEntry, isProtectedPath, isShepherdOn, newShepherdState, upsertShepherdComment } from "./shepherd.js";
-import { runSecondPass } from "../src/ai.js";
-import { aiModeOf } from "../src/deep.js";
+import { runSecondPass } from "./secondpass.js";
+import { aiModeOf } from "./aimode.js";
 
 /** Rules-only note when the model call or its JSON could not be used. The class only: no provider body, no model text. */
 export function aiUnavailableNote(errorClass: string, truncated = false): string {

@@ -352,6 +352,14 @@ describe("All checks", () => {
 });
 
 describe("Not checked", () => {
+  it("is a tight list: one line per gap, missing policy files on one line, no generic line when a note explains the AI gap", () => {
+    const md = renderComment({ agg, mode: "rules-only", tokensEstimate: 0,
+      notes: ["AI review unavailable (parse).", "Policy file missing or empty: REVIEW_POLICY.md", "Policy file missing or empty: AGENTS.md"] });
+    const nc = md.slice(md.indexOf("### Not checked"), md.indexOf("---"));
+    expect(nc).toBe("### Not checked\n\n- AI review unavailable \\(parse\\).\n- Policy files missing or empty: REVIEW\\_POLICY.md, AGENTS.md\n\n");
+    expect(md).not.toContain("AI review was not performed");
+  });
+
   it("is omitted when there is nothing to report", () => {
     const md = mk([file()], {}, { mode: "gpt-test" });
     expect(md).not.toContain("Not checked");

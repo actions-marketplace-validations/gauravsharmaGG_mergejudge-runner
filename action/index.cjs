@@ -55040,11 +55040,15 @@ function allChecks(rubric) {
 }
 function notChecked(r) {
   const out = [];
-  if (r.mode === "rules-only" && !r.notes.some((x) => /rules-only/i.test(x))) out.push("- AI review was not performed; deterministic rules only.", "");
-  for (const p of r.policyFiles ?? []) if (p.truncated) out.push(`- Policy truncated: ${escapeMd(p.path)}`, "");
-  for (const x of r.agg.rubric ?? []) if (x.verdict === "unverified") out.push(`- Unverified check: ${escapeMd(criterionLabel(x.id))}`, "");
-  for (const n of r.notes) out.push(`- ${renderNote(n)}`, "");
+  if (r.mode === "rules-only" && !r.notes.some((x) => /rules-only|AI review (?:unavailable|skipped)/i.test(x))) out.push("- AI review was not performed; deterministic rules only.");
+  for (const p of r.policyFiles ?? []) if (p.truncated) out.push(`- Policy truncated: ${escapeMd(p.path)}`);
+  for (const x of r.agg.rubric ?? []) if (x.verdict === "unverified") out.push(`- Unverified check: ${escapeMd(criterionLabel(x.id))}`);
+  const MISSING = /^Policy file missing or empty: (.+)$/;
+  const missing = r.notes.map((n) => n.match(MISSING)?.[1]).filter((p) => !!p);
+  for (const n of r.notes) if (!MISSING.test(n)) out.push(`- ${renderNote(n)}`);
+  if (missing.length) out.push(`- Policy ${missing.length === 1 ? "file" : "files"} missing or empty: ${missing.map(escapeMd).join(", ")}`);
   if (!out.length) return "";
+  out.push("");
   return capBody(["### Not checked", "", ...out].join("\n"), "", 12e3);
 }
 function renderComment(r) {

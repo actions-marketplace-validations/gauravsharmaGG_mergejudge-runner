@@ -231,9 +231,42 @@ No config file is required. Built-in defaults apply, and the file is read from t
 
 ### PR story chart
 
-Enable `comment.flow_chart: true` for a separate advisory AI call: a 583-character system prompt (about 150 tokens) and a 105-character envelope, plus at most 24,000 diff characters and 4,000 finding characters in, and up to 1,200 tokens out (on 43 benchmark PRs the story JSON was 1,400 to 3,300 characters). The review request is unchanged. Rules-only, skipped-AI, empty/excluded-file and cached-only reviews skip story generation. Calls use existing provider usage reporting; usage has no purpose label, so story tokens are counted with the same model. Runner engines keep their existing engine-call accounting. A failed story call or upload leaves the review unchanged.
+The PR story is a short picture of what a pull request does, shown in the MergeJudge comment under "What to check". It is off by default and never changes lanes, findings or checks.
 
-With SVG style, `comment.flow_chart_host: none` shows the text list. In the Action, `branch` requires `contents: write` and publishes the SVG to `mergejudge-assets` in a public repository. Images and their text are public; the branch can be deleted any time (future charts recreate it). Private or unknown repository visibility and upload errors fall back to the text list. GitHub's mobile app may show only the text list. Hosted Apps can supply their own image hook later; no hosted storage is included. Mermaid is available through `comment.flow_chart_style: mermaid`. The story block is open by default and can be collapsed. Story text keeps brackets, quotes and semicolons, escaped for SVG, HTML and markdown; Mermaid labels turn them into spaces.
+**Turn it on (GitHub Action)**
+
+1. In `.mergejudge.yml`, add:
+
+   ```yaml
+   comment:
+     flow_chart: true
+   ```
+
+2. Merge that change to the base branch. MergeJudge reads config from the PR's base branch, so the story starts on PRs opened or updated after the merge. Config changes always go to review.
+
+3. Choose how the picture is shown with `comment.flow_chart_host`:
+   - `none` (default): a plain numbered step list only. Works in private repositories and needs no extra permissions.
+   - `branch`: the list plus an SVG chart. Add `contents: write` to the workflow's `permissions:`. The SVG is uploaded to the orphan `mergejudge-assets` branch.
+
+4. Public-repo note for `branch`: the chart image and its text are public. Private or unknown repository visibility, and any upload error, fall back to the step list. You can delete `mergejudge-assets` any time; later charts recreate it.
+
+5. Optional: set `comment.flow_chart_style: mermaid` for a Mermaid chart instead of SVG (no host needed), or `comment.flow_chart_animate: false` for a static chart.
+
+6. What users see: an open "What this PR does (AI-drawn, may be incomplete)" block with the chart (if hosted) and a numbered list of up to 6 steps, for example `Steps: 1. Validate the input; 2. Skip invalid values; 3. Return the total`. Changed steps show before and after. The block can be collapsed, and GitHub's mobile app may show only the list.
+
+**Turn it off**
+
+1. In `.mergejudge.yml`, set `flow_chart: false` under `comment:` (or delete the line; off is the default).
+2. Merge that change to the base branch. New reviews then make no story call and show no story block.
+3. Optional: delete the `mergejudge-assets` branch to remove published charts, and drop `contents: write` if nothing else needs it.
+
+**Cost and limits**
+
+- A separate advisory AI call after final findings: a 583-character system prompt (about 150 tokens) and a 105-character envelope, plus at most 24,000 diff characters and 4,000 finding characters in, and up to 1,200 tokens out (on 43 benchmark PRs the story JSON was 1,400 to 3,300 characters). The review request is unchanged.
+- Rules-only, skipped-AI, empty/excluded-file and cached-only reviews skip story generation. Calls use existing provider usage reporting; usage has no purpose label, so story tokens are counted with the same model. Runner engines keep their existing engine-call accounting.
+- A failed story call or upload leaves the review unchanged.
+- Story text keeps brackets, quotes and semicolons, escaped for SVG, HTML and markdown; Mermaid labels turn them into spaces. SVG respects reduced-motion preferences.
+- Hosted Apps can supply their own image hook later; no hosted storage is included.
 
 Action inputs (`action.yml`): `github_token`, `app_id`, `app_private_key`, `mode` (`auto` | `triage` | `feedback` | `propose`), `review_mode` (`fast` | `deep`), `config_path`, `provider`, `base_url`, `model`, `api_key_env`. Outputs: `lane`, `proposal_pr`.
 

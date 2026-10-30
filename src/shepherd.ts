@@ -14,19 +14,19 @@ import type { Octokit, Repo } from "../core/github.js";
 import { completeWithMeta, type LlmProvider } from "../core/llm/provider.js";
 import { CHECK_NAME } from "../core/render.js";
 import {
-  SHEPHERD_LABEL, SHEPHERD_MARKER, addEntry, addGrant, addWaiting, dropWaiting, findWaiting, hasWaiting, isOwnStateComment, isProtectedPath, isShepherdOn, newShepherdState, parseShepherdCommand, parseShepherdState,
-  protectedHits, upsertShepherdComment, type EntryKind, type ShepherdState, type WaitingRun,
+  SHEPHERD_LABEL, SHEPHERD_MARKER, addEntry, addGrant, addWaiting, dropWaiting, findWaiting, hasWaiting, isProtectedPath, isShepherdOn, newShepherdState, parseShepherdCommand,
+  protectedHits, readShepherdState, upsertShepherdComment, type EntryKind, type ShepherdState, type WaitingRun,
 } from "../core/shepherd.js";
 import { classifyConflictFile, isLockfile, manifestOf, unionLines } from "../core/shepherdconflict.js";
 import {
-  buildCommitMessage, classifyFailure, countFailingChecks, decide, fingerprintFailure, isGreen, referencedFiles, shepherdHistory, tailLog,
+  buildCommitMessage, classifyFailure, countFailingChecks, decide, extractFailureSection, fingerprintFailure, isGreen, isShepherdCommitMessage, referencedFiles, shepherdHistory, tailLog,
   type CheckTally, type Decision, type Fingerprint, type ShepherdHistory,
 } from "../core/shepherdfail.js";
 import { HANDOFF_MARKER, NEEDS_HUMAN_LABEL, renderHandoff } from "../core/shepherdhandoff.js";
 import { RULE, RULE_QUESTION, RULE_STATUS, RULE_TITLE, effectiveCap, type RuleId } from "../core/shepherdrules.js";
 import { redact, type LogFns } from "./redact.js";
 import {
-  DEFAULT_IDENTITY, changedByPr, checkoutHead, commitStaged, incomingPaths, mergeBase, pushHead, resetClean, stageAll, stageContent, startMerge, takeTheirs, type Identity,
+  DEFAULT_IDENTITY, changedByPr, checkoutHead, commitStaged, incomingPaths, mergeBase, pushHead, refSha, resetClean, stageAll, stageContent, startMerge, takeTheirs, type Identity,
 } from "./shepherdgit.js";
 
 export interface RunResult { code: number; output: string }
@@ -71,7 +71,7 @@ const sh = (cmd: string, cwd: string): Promise<RunResult> =>
 
 interface Sender { login?: string; type?: string }
 interface PullLite {
-  number: number; state: string; labels?: { name: string }[]; mergeable?: boolean | null;
+  number: number; state: string; labels?: { name: string }[]; mergeable?: boolean | null; mergeable_state?: string; draft?: boolean;
   head: { sha: string; ref: string; repo?: { full_name?: string } | null };
   base: { ref: string; repo: { full_name: string } };
 }
@@ -92,6 +92,12 @@ export interface ShepherdPayload {
   state?: string;
   context?: string;
   branches?: { name: string }[];
+  /** `push` event: the pushed ref (`refs/heads/main`), the head commit and whether the ref was deleted. */
+  ref?: string;
+  /** `push` event: the sha the ref points at after the push (the new base tip). */
+  after?: string;
+  deleted?: boolean;
+  head_commit?: { message?: string } | null;
 }
 
 const isBot = (c: ShepherdCtx, s?: Sender) => !s || s.type === "Bot" || (s.login ?? "").endsWith("[bot]") || (!!c.botLogin && s.login === c.botLogin);
@@ -114,8 +120,7 @@ async function removeLabel(c: ShepherdCtx, n: number, label: string): Promise<vo
 
 async function readState(c: ShepherdCtx, n: number): Promise<ShepherdState | null> {
   const comments = await c.ok.paginate(c.ok.rest.issues.listComments, { ...c.repo, issue_number: n, per_page: 100 });
-  const mine = comments.find((x) => isOwnStateComment(x, c.botLogin));
-  return parseShepherdState(mine?.body);
+  return readShepherdState(comments, c.botLogin);
 }
 
 /** The fix-attempt cap of this PR: the configured budget plus retry grants from the (trusted) state comment. */
@@ -152,6 +157,11 @@ export interface HandOffArgs {
   failures?: Pick<Fingerprint, "job" | "hash" | "raw">[];
   paths?: string[];
   hunks?: { path: string; line: number; ours: string; theirs: string }[];
+  /** Branch names for the hunk labels, the CI run that started this, and the base commit being merged (full sha). */
+  baseRef?: string;
+  headRef?: string;
+  run?: string;
+  baseCommit?: string;
 }
 
 /**
@@ -165,11 +175,11 @@ export async function handOff(c: ShepherdCtx, pull: number, a: HandOffArgs): Pro
   const runOf = (sha: string) => prev?.entries.find((e) => e.commit && sha.startsWith(e.commit.slice(0, 7)) )?.run;
   const body = renderHandoff({
     rule: a.rule, reason: a.reason, question: a.question ?? RULE_QUESTION[a.rule], repoUrl: repoUrl(c),
-    failures: a.failures, paths: a.paths, hunks: a.hunks,
+    failures: a.failures, paths: a.paths, hunks: a.hunks, baseRef: a.baseRef, headRef: a.headRef, run: a.run, baseCommit: a.baseCommit,
     attempts: hist.records.map((r) => ({ ...r, run: runOf(r.sha) })),
   });
   await c.ok.rest.issues.createComment({ ...c.repo, issue_number: pull, body });
-  await note(c, pull, hist, { kind: "info", what: RULE_TITLE[a.rule], changed: "nothing pushed", result: `Stopped: ${a.reason}` }, { on: false, status: RULE_STATUS[a.rule] });
+  await note(c, pull, hist, { kind: "info", what: RULE_TITLE[a.rule], changed: "nothing pushed", result: `Stopped: ${a.reason}`, run: a.run, commit: a.baseCommit }, { on: false, status: RULE_STATUS[a.rule] });
   c.log.info(`Shepherd hand-off #${pull}: ${RULE_TITLE[a.rule]} (${a.reason}).`);
 }
 
@@ -184,6 +194,7 @@ export async function runShepherd(c: ShepherdCtx, eventName: string, p: Shepherd
     case "workflow_run": return onWorkflowRun(c, p);
     case "check_suite": return onCheckSuite(c, p);
     case "status": return onStatus(c, p);
+    case "push": case "schedule": case "workflow_dispatch": return onSweep(c, eventName, p);
     default: c.log.info(`Shepherd ignores the ${eventName} event.`);
   }
 }
@@ -300,10 +311,127 @@ async function onHeadChanged(c: ShepherdCtx, pr: PullLite, skipConflict = false)
   if (!skipConflict && !green) await conflictCheck(c, pr);
 }
 
+// ---------------- base branch moved: sweep ----------------
+
+/** Most shepherded PRs one sweep looks at; the rest wait for the next push or schedule. */
+export const SWEEP_MAX_PRS = 10;
+/** Most open PRs one sweep reads at all (labels come with the list; a state comment costs one call each). */
+const SWEEP_MAX_SCAN = 100;
+/** GitHub computes `mergeable` asynchronously and answers null at first: poll with a short backoff, then give up (7 s at most). */
+const MERGEABLE_BACKOFF_MS = [1000, 2000, 4000];
+
+/** A push made by Shepherd itself (rule 7): its own identity, or a commit carrying its trailer. */
+const ownPush = (c: ShepherdCtx, p: ShepherdPayload) =>
+  isShepherdCommitMessage(p.head_commit?.message) || (!!c.botLogin && p.sender?.login === c.botLogin);
+
+/** Why `mergeable` cannot be used: GitHub has not computed it (`unknown`), or computed it against an older base (`stale`). */
+interface Mergeable { pr: PullLite; gap?: "unknown" | "stale"; computedOn?: string }
+
+/**
+ * The base tip a `mergeable: true` answer was computed against: the first parent of the PR's merge commit. GitHub can keep
+ * answering true for many minutes after the base moved (it never goes back to null). Missing commit or error: "" (stale).
+ */
+async function mergeComputedOn(c: ShepherdCtx, pr: PullLite): Promise<string> {
+  const sha = (pr as { merge_commit_sha?: string | null }).merge_commit_sha;
+  if (!sha) return "";
+  try {
+    const { data } = await c.ok.rest.repos.getCommit({ ...c.repo, ref: sha });
+    return data.parents?.[0]?.sha ?? "";
+  } catch { return ""; }
+}
+
+/** Polls with the backoff while `mergeable` is null or stale (true, but not computed against `baseTip`); false / dirty are trusted. */
+async function mergeableOf(c: ShepherdCtx, n: number, baseTip?: string): Promise<Mergeable> {
+  let pr = await loadPull(c, n);
+  for (let i = 0; ; i++) {
+    let res: Mergeable = { pr, gap: "unknown" };
+    if (pr.mergeable === false || pr.mergeable_state === "dirty" || (pr.mergeable === true && !baseTip)) return { pr };
+    if (pr.mergeable === true) {
+      const computedOn = await mergeComputedOn(c, pr);
+      if (computedOn === baseTip) return { pr };
+      res = { pr, gap: "stale", computedOn };
+    }
+    if (i >= MERGEABLE_BACKOFF_MS.length) return res;
+    await (c.sleep ?? ((t) => new Promise((r) => setTimeout(r, t))))(MERGEABLE_BACKOFF_MS[i]!);
+    pr = await loadPull(c, n);
+  }
+}
+
+const shq = (s: string) => "'" + s.split("'").join("'\\''") + "'";
+
+/** Decide the merge locally with `git merge-tree` (exit 1 = conflict, 0 = clean); anything else, including a failed fetch, is unknown. */
+async function localMergeCheck(c: ShepherdCtx, pr: PullLite, baseTip: string): Promise<"conflict" | "clean" | "unknown"> {
+  const head = pr.head.sha;
+  if (!/^[0-9a-f]{40,64}$/i.test(baseTip) || !/^[0-9a-f]{40,64}$/i.test(head)) return "unknown";
+  let got = await sh(`git fetch --no-tags origin ${baseTip} ${head}`, c.cwd);
+  if (got.code !== 0) got = await sh(`git fetch --no-tags origin ${shq(pr.base.ref)} ${shq(pr.head.ref)}`, c.cwd);
+  if (got.code !== 0) return "unknown";
+  // merge-tree can exit 1 for a bad object too: make sure both commits are really here before reading its exit code as a conflict.
+  if ((await sh(`git cat-file -e ${baseTip}^{commit} && git cat-file -e ${head}^{commit}`, c.cwd)).code !== 0) return "unknown";
+  const r = await sh(`git merge-tree --write-tree --no-messages ${baseTip} ${head}`, c.cwd);
+  return r.code === 1 ? "conflict" : r.code === 0 ? "clean" : "unknown";
+}
+
+/**
+ * The base branch moved (`push`), or a periodic `schedule` / `workflow_dispatch` sweep. GitHub starts no pull_request run for a
+ * PR that conflicts with its base, so nothing else would notice. Looks at open, non-draft, same-repo PRs that Shepherd is on
+ * for (label, or on in its state comment) and that have no needs-human; a push looks at PRs based on the pushed branch only.
+ * For each (at most SWEEP_MAX_PRS) it waits for GitHub to compute `mergeable` and runs conflictCheck when the PR conflicts.
+ * conflictCheck fetches and checks out the PR branch itself, as for comment events (the checkout here is the base branch).
+ */
+async function onSweep(c: ShepherdCtx, ev: string, p: ShepherdPayload): Promise<void> {
+  let base: string | undefined;
+  if (ev === "push") {
+    const m = /^refs\/heads\/(.+)$/.exec(p.ref ?? "");
+    if (!m || p.deleted) { c.log.info("push is not to a branch tip; ignoring."); return; }
+    if (ownPush(c, p)) { c.log.info("Ignoring a push made by Shepherd itself."); return; }
+    base = m[1];
+  }
+  const baseTips = new Map<string, string | undefined>();
+  if (base && p.after && /^[0-9a-f]+$/i.test(p.after)) baseTips.set(base, p.after);
+  const tipOf = async (ref: string): Promise<string | undefined> => {
+    if (!baseTips.has(ref)) {
+      try { baseTips.set(ref, (await c.ok.rest.git.getRef({ ...c.repo, ref: `heads/${ref}` })).data.object.sha); }
+      catch (e) { warn(c, `Could not read the tip of ${ref}: ${(e as Error).message}`); baseTips.set(ref, undefined); }
+    }
+    return baseTips.get(ref);
+  };
+  const open = (await c.ok.paginate(c.ok.rest.pulls.list, { ...c.repo, state: "open", ...(base ? { base } : {}), sort: "created", direction: "asc", per_page: 100 })) as unknown as PullLite[];
+  let looked = 0, scanned = 0;
+  for (const raw of open) {
+    if (looked >= SWEEP_MAX_PRS || scanned >= SWEEP_MAX_SCAN) { c.log.info(`Sweep limit reached (${SWEEP_MAX_PRS} shepherded PRs per run); the rest wait for the next sweep.`); break; }
+    scanned++;
+    if (raw.draft || raw.state !== "open" || hasLabel(raw, NEEDS_HUMAN_LABEL)) continue;
+    if (!raw.head.repo?.full_name || raw.head.repo.full_name !== raw.base.repo.full_name) continue;
+    if (!hasLabel(raw, SHEPHERD_LABEL) && !(await readState(c, raw.number))?.on) continue;
+    looked++;
+    try {
+      const baseTip = await tipOf(raw.base.ref);
+      const { pr, gap, computedOn } = await mergeableOf(c, raw.number, baseTip);
+      if (pr.state !== "open") continue;
+      if (gap && baseTip) {
+        if (gap === "stale") c.log.info(`#${pr.number}: GitHub's mergeable answer is stale (computed against ${computedOn ? computedOn.slice(0, 7) : "an unknown base"}, base is ${baseTip.slice(0, 7)}); checking the merge locally.`);
+        else c.log.info(`#${pr.number}: GitHub has not computed mergeable; checking the merge locally.`);
+        const local = await localMergeCheck(c, pr, baseTip);
+        if (local === "conflict") {
+          c.log.info(`#${pr.number}: a local merge check of ${baseTip.slice(0, 7)} and ${pr.head.sha.slice(0, 7)} finds a merge conflict.`);
+          await conflictCheck(c, { ...pr, mergeable: false });
+        } else c.log.info(`#${pr.number}: ${local === "clean" ? "the local merge check finds no merge conflict" : "the local merge check could not decide"}; the sweep leaves it.`);
+        continue;
+      }
+      if (pr.mergeable === false || pr.mergeable_state === "dirty") await conflictCheck(c, pr.mergeable === false ? pr : { ...pr, mergeable: false });
+      else c.log.info(`#${pr.number} ${pr.mergeable ? "has no merge conflict" : "mergeable state is still unknown"}; the sweep leaves it.`);
+    } catch (e) {
+      warn(c, `Sweep of #${raw.number} failed: ${(e as Error).message}`);
+    }
+  }
+}
+
 // ---------------- on / off ----------------
 
 async function turnOff(c: ShepherdCtx, pr: PullLite, actor: string): Promise<void> {
   if (hasLabel(pr, SHEPHERD_LABEL)) await removeLabel(c, pr.number, SHEPHERD_LABEL);
+  if ((await readState(c, pr.number))?.status === "off") { c.log.info(`Shepherd is already off for #${pr.number}; nothing to log.`); return; }
   const hist = await history(c, pr.number);
   await note(c, pr.number, hist, { kind: "info", what: "Shepherd turned off", changed: "nothing", result: `Off, by ${actor}` }, { on: false, status: "off" });
   c.log.info(`Shepherd off for #${pr.number}.`);
@@ -311,10 +439,15 @@ async function turnOff(c: ShepherdCtx, pr: PullLite, actor: string): Promise<voi
 
 /** Turn Shepherd on (or resume it). `retry` also grants exactly one more fix attempt (`/mergejudge shepherd retry`). */
 async function turnOn(c: ShepherdCtx, pr: PullLite, actor: string, how: "on" | "resumed" | "retry" = "on", commentId?: number): Promise<void> {
+  // Already on (label, state on, nothing waiting for a human): a plain `/mergejudge shepherd` logs no second "turned on" row.
+  const wasOn = how === "on" && hasLabel(pr, SHEPHERD_LABEL) && !hasLabel(pr, NEEDS_HUMAN_LABEL);
+  const prev = wasOn ? await readState(c, pr.number) : null;
   if (!hasLabel(pr, SHEPHERD_LABEL)) await addLabel(c, pr.number, SHEPHERD_LABEL);
   if (hasLabel(pr, NEEDS_HUMAN_LABEL)) await removeLabel(c, pr.number, NEEDS_HUMAN_LABEL);
   const hist = await history(c, pr.number);
-  const state = how === "retry"
+  const state = prev?.on
+    ? prev
+    : how === "retry"
     ? await setState(c, pr.number, hist, (s) => addEntry(addGrant({ ...s, on: true, status: "watching" }, { who: actor, at: nowIso(c), comment: commentId }), { at: nowIso(c), kind: "info", what: "Retry granted", changed: "nothing", result: `+1 fix attempt, by ${actor}` }))
     : await note(c, pr.number, hist, { kind: "info", what: how === "on" ? "Shepherd turned on" : "Shepherd resumed", changed: "nothing", result: `Watching, by ${actor}` }, { on: true, status: "watching" });
   c.log.info(`Shepherd ${how} for #${pr.number}.`);
@@ -325,7 +458,41 @@ async function turnOn(c: ShepherdCtx, pr: PullLite, actor: string, how: "on" | "
     return;
   }
   await conflictCheck(c, pr);
+  if (how === "retry") await recheckFailedRun(c, pr);
 }
+
+/**
+ * After a retry grant: pick up the CI failure that is still outstanding on the head. Only when the PR is open, Shepherd is on
+ * (label, no needs-human, state on) and the head sha is unchanged (a conflict resolution that moved it starts new CI anyway).
+ * The latest completed failed run of each workflow on the head counts (a newer green run of the same workflow clears it);
+ * Shepherd's own workflow is never looked at (rule 7). The run then goes through the normal decide() and act(): a failure
+ * Shepherd already knows (fingerprint in the state or trailers, or its failed jobs were already re-run) is decided at once
+ * under every loop breaker, with the new grant allowing the fix attempt; a new one gets the usual flaky-test re-run first.
+ * With no failed run on the head nothing happens beyond the conflict check.
+ */
+async function recheckFailedRun(c: ShepherdCtx, before: PullLite): Promise<void> {
+  const pr = await loadPull(c, before.number);
+  if (pr.state !== "open" || !hasLabel(pr, SHEPHERD_LABEL) || hasLabel(pr, NEEDS_HUMAN_LABEL) || pr.head.sha !== before.head.sha) return;
+  const state = await readState(c, pr.number);
+  if (!state?.on) return;
+  const runs = await c.ok.paginate(c.ok.rest.actions.listWorkflowRunsForRepo, { ...c.repo, head_sha: pr.head.sha, status: "completed", per_page: 100 });
+  const mine = (r: { name?: string | null; path?: string }) => (!!c.self?.name && r.name === c.self.name) || (!!r.path && !!c.self?.ref?.includes(r.path));
+  const latest = new Map<string, (typeof runs)[number]>();
+  for (const r of runs) {
+    if (mine(r)) continue;
+    const key = String(r.workflow_id ?? r.name);
+    if (!latest.has(key) || r.id > latest.get(key)!.id) latest.set(key, r);
+  }
+  const failed = [...latest.values()].filter((r) => r.conclusion && RETRY_RECHECK.has(r.conclusion)).sort((a, b) => b.id - a.id)[0];
+  if (!failed) { c.log.info(`#${pr.number}: no failed run on the head ${pr.head.sha.slice(0, 7)} to re-check after the retry.`); return; }
+  const runUrl = `${repoUrl(c)}/actions/runs/${failed.id}`;
+  c.log.info(`#${pr.number}: re-checking the failed run ${failed.id} after the retry.`);
+  const hist = await history(c, pr.number);
+  await note(c, pr.number, hist, { kind: "ci", what: `Run ${failed.name ?? failed.id} is still failing on the head`, changed: "nothing yet", result: "Retry: Shepherd looks at this failed run again", commit: pr.head.sha, run: runUrl });
+  await evaluateFailedRun(c, pr, { id: failed.id, conclusion: failed.conclusion!, attempt: failed.run_attempt ?? 1 }, await readState(c, pr.number), hist, false);
+}
+/** Conclusions a retry re-checks: a cancelled run was stopped on purpose (a newer push or a person), so it is not an outstanding failure. */
+const RETRY_RECHECK = new Set(["failure", "timed_out", "startup_failure"]);
 
 // ---------------- checks on the head (L4 baseline) ----------------
 
@@ -469,7 +636,7 @@ async function evaluateFailedRun(c: ShepherdCtx, pr: PullLite, run: { id: number
   for (const j of failedJobs) {
     let raw = "";
     try { raw = String((await c.ok.rest.actions.downloadJobLogsForWorkflowRun({ ...c.repo, job_id: j.id })).data ?? ""); } catch (e) { warn(c, `Could not download the log of job ${j.name}: ${(e as Error).message}`); }
-    logs[j.name] = redactLog(tailLog(raw, 200, 20_000));
+    logs[j.name] = redactLog(tailLog(extractFailureSection(raw), 200, 20_000));
     fps.push(fingerprintFailure(j.name, logs[j.name]!));
   }
   const cantFix = classifyFailure(failedJobs.map((j) => ({ name: j.name, conclusion: j.conclusion })), logs, (f) => isProtectedPath(f, c.cfg));
@@ -506,7 +673,7 @@ async function act(c: ShepherdCtx, pr: PullLite, d: Decision, f: FailCtx): Promi
       await note(c, n, f.hist, { kind: "ci", what, changed: "nothing pushed", result: "Re-running failed jobs to rule out a flaky test (no attempt counted)", run: f.runUrl });
       return;
     case "handoff":
-      return handOff(c, n, { rule: d.rule, reason: d.reason, question: d.question, failures: f.fps });
+      return handOff(c, n, { rule: d.rule, reason: d.reason, question: d.question, failures: f.fps, run: f.runUrl });
     case "fix":
       return fixCi(c, pr, d.attempt, f);
   }
@@ -610,15 +777,15 @@ async function fixCi(c: ShepherdCtx, pr: PullLite, attempt: number, f: FailCtx):
     if (!fix.ok) {
       await resetClean(c.cwd);
       if ("skip" in fix) { c.log.info(fix.skip); return; }
-      return handOff(c, n, { ...fix.hand, failures: f.fps });
+      return handOff(c, n, { ...fix.hand, failures: f.fps, run: f.runUrl });
     }
     const staged = await stageAll(c.cwd);
-    if (!staged.files.length) { await resetClean(c.cwd); return handOff(c, n, { rule: RULE.H4, reason: "the fix changed nothing", failures: f.fps }); }
+    if (!staged.files.length) { await resetClean(c.cwd); return handOff(c, n, { rule: RULE.H4, reason: "the fix changed nothing", failures: f.fps, run: f.runUrl }); }
     const hits = protectedHits(staged.files, { shepherd: sc });
-    if (hits.length) { await resetClean(c.cwd); return handOff(c, n, { rule: RULE.H1, reason: "the fix needs a protected path; nothing was pushed", paths: hits, failures: f.fps }); }
+    if (hits.length) { await resetClean(c.cwd); return handOff(c, n, { rule: RULE.H1, reason: "the fix needs a protected path; nothing was pushed", paths: hits, failures: f.fps, run: f.runUrl }); }
     if (staged.lines > sc.max_fix_lines || staged.files.length > sc.max_fix_files) {
       await resetClean(c.cwd);
-      return handOff(c, n, { rule: RULE.H2, reason: `the fix changes ${staged.lines} lines in ${staged.files.length} files (limits: ${sc.max_fix_lines} lines, ${sc.max_fix_files} files); nothing was pushed`, paths: staged.files, failures: f.fps });
+      return handOff(c, n, { rule: RULE.H2, reason: `the fix changes ${staged.lines} lines in ${staged.files.length} files (limits: ${sc.max_fix_lines} lines, ${sc.max_fix_files} files); nothing was pushed`, paths: staged.files, failures: f.fps, run: f.runUrl });
     }
     const job = f.fps[0]?.job ?? "CI";
     const message = buildCommitMessage({
@@ -653,16 +820,23 @@ export async function conflictCheck(c: ShepherdCtx, prIn: PullLite): Promise<voi
   if (hist.attempts >= cap) return handOff(c, n, { rule: RULE.L1, reason: `all ${cap} fix attempts are used (${hist.attempts}/${cap}), so the merge conflict is left to a human` });
   if (!(await checkoutHead(c.cwd, pr.head.ref, pr.head.sha))) { c.log.info(`Branch ${pr.head.ref} moved; skipping conflict work.`); return; }
   const attempt = hist.attempts + 1;
-  /** H1 over the whole merge (not just the conflicted files): whatever the base brings in must be free of protected paths. Runs before any size check. */
-  const incomingGuard = async (): Promise<boolean> => {
+  /** Hand-off with the branch names and, once the merge has started, the base commit being merged. */
+  let baseCommit: string | undefined;
+  const hand = (a: HandOffArgs) => handOff(c, n, { baseRef: pr.base.ref, headRef: pr.head.ref, baseCommit, ...a });
+  /**
+   * H1 over the whole merge (not just the conflicted files): whatever the base brings in must be free of protected paths.
+   * Runs first, right after the merge starts and before any conflict classification, size check or resolution, for clean and
+   * conflicted merges alike, so a protected file always reports H1 (never H4 or H2).
+   */
+  const incomingGuard = async (conflicted: string[] = []): Promise<boolean> => {
     const incoming = protectedHits(await incomingPaths(c.cwd, pr.head.sha), { shepherd: sc });
     if (!incoming.length) return false;
     await resetClean(c.cwd);
-    await handOff(c, n, { rule: RULE.H1, reason: `merging ${pr.base.ref} would bring changes to protected files into this PR; the merge was aborted and nothing was pushed`, paths: incoming });
+    const inConflict = incoming.some((p) => conflicted.includes(p));
+    await hand({ rule: RULE.H1, reason: inConflict ? "the merge conflict is in a protected path; the merge was aborted and nothing was pushed" : `merging ${pr.base.ref} would bring changes to protected files into this PR; the merge was aborted and nothing was pushed`, paths: incoming });
     return true;
   };
   const finish = async (touched: string[], lines: number) => {
-    if (await incomingGuard()) return;
     const message = buildCommitMessage({ subject: `shepherd: resolve merge conflicts with ${pr.base.ref} (attempt ${attempt}/${cap})`, attempt, kind: "conflict" });
     const sha = await commitStaged(c.cwd, message, c.identity ?? DEFAULT_IDENTITY);
     const pushed = await pushHead(c.cwd, pr.head.ref, { token: c.token, serverUrl: c.serverUrl, onSecret: c.onSecret });
@@ -673,11 +847,11 @@ export async function conflictCheck(c: ShepherdCtx, prIn: PullLite): Promise<voi
   try {
     const start = await startMerge(c.cwd, pr.base.ref, c.identity ?? DEFAULT_IDENTITY);
     if (start.state === "uptodate") { c.log.info("Base is already merged; nothing to resolve."); return; }
+    baseCommit = await refSha(c.cwd, `refs/remotes/origin/${pr.base.ref}`);
+    if (await incomingGuard(start.state === "conflict" ? start.conflicted : [])) return;
     if (start.state === "clean") return await finish([], 0);
 
     const conflicted = start.conflicted;
-    const hits = protectedHits(conflicted, { shepherd: sc });
-    if (hits.length) { await resetClean(c.cwd); return handOff(c, n, { rule: RULE.H1, reason: "the merge conflict is in a protected path; nothing was pushed", paths: hits }); }
     const hunks: { path: string; line: number; ours: string; theirs: string }[] = [];
     const locks: string[] = [];
     for (const path of conflicted) {
@@ -686,7 +860,7 @@ export async function conflictCheck(c: ShepherdCtx, prIn: PullLite): Promise<voi
       if (v.kind === "resolved") writeFileSync(join(c.cwd, path), v.text);
       else if (v.kind === "logic") hunks.push(...v.hunks.map((h) => ({ path, line: h.line, ours: h.ours, theirs: h.theirs })));
     }
-    if (hunks.length) { await resetClean(c.cwd); return handOff(c, n, { rule: RULE.H4, reason: "both sides changed the same logic; `git merge --abort` was run and nothing was pushed", hunks, paths: [...new Set(hunks.map((h) => h.path))] }); }
+    if (hunks.length) { await resetClean(c.cwd); return hand({ rule: RULE.H4, reason: "both sides changed the same logic; `git merge --abort` was run and nothing was pushed", hunks, paths: [...new Set(hunks.map((h) => h.path))] }); }
 
     const mine = locks.length ? await changedByPr(c.cwd, await mergeBase(c.cwd, pr.base.ref)) : new Set<string>();
     for (const lock of locks) {
@@ -695,24 +869,22 @@ export async function conflictCheck(c: ShepherdCtx, prIn: PullLite): Promise<voi
       else if (lock.endsWith("package-lock.json")) {
         await takeTheirs(c.cwd, lock);
         if (manifestChanged) {
-          if (!(await (c.npmAvailable ?? npmAvailable)(c.cwd))) { await resetClean(c.cwd); return handOff(c, n, { rule: RULE.H4, reason: "package-lock.json conflicts and npm is not available to regenerate it", paths: [lock] }); }
+          if (!(await (c.npmAvailable ?? npmAvailable)(c.cwd))) { await resetClean(c.cwd); return hand({ rule: RULE.H4, reason: "package-lock.json conflicts and npm is not available to regenerate it", paths: [lock] }); }
           const r = await (c.runCommand ?? sh)("npm install --package-lock-only --ignore-scripts", join(c.cwd, dirname(lock)));
-          if (r.code !== 0) { await resetClean(c.cwd); return handOff(c, n, { rule: RULE.H4, reason: "regenerating package-lock.json failed", paths: [lock] }); }
+          if (r.code !== 0) { await resetClean(c.cwd); return hand({ rule: RULE.H4, reason: "regenerating package-lock.json failed", paths: [lock] }); }
         }
       } else if (manifestChanged) {
         await resetClean(c.cwd);
-        return handOff(c, n, { rule: RULE.H4, reason: `${lock} conflicts and this PR also changed its manifest, which Shepherd cannot regenerate`, paths: [lock] });
+        return hand({ rule: RULE.H4, reason: `${lock} conflicts and this PR also changed its manifest, which Shepherd cannot regenerate`, paths: [lock] });
       } else await takeTheirs(c.cwd, lock);
     }
-    for (const path of conflicted) if (/^(<{7}|>{7}) /m.test(readFileSync(join(c.cwd, path), "utf8"))) { await resetClean(c.cwd); return handOff(c, n, { rule: RULE.H4, reason: "conflict markers remained after the mechanical resolution", paths: [path] }); }
+    for (const path of conflicted) if (/^(<{7}|>{7}) /m.test(readFileSync(join(c.cwd, path), "utf8"))) { await resetClean(c.cwd); return hand({ rule: RULE.H4, reason: "conflict markers remained after the mechanical resolution", paths: [path] }); }
 
-    // H1 over the whole merge comes before the size check: an oversized merge that also touches protected files reports H1.
     const staged = await stageAll(c.cwd, conflicted);
-    if (await incomingGuard()) return;
     // Size: lines changed in the conflicted files relative to the PR's own ("ours") version.
     if (staged.lines > sc.max_fix_lines || staged.files.length > sc.max_fix_files) {
       await resetClean(c.cwd);
-      return handOff(c, n, { rule: RULE.H2, reason: `the resolution changes ${staged.lines} lines in ${staged.files.length} files (limits: ${sc.max_fix_lines} lines, ${sc.max_fix_files} files); nothing was pushed`, paths: conflicted });
+      return hand({ rule: RULE.H2, reason: `the resolution changes ${staged.lines} lines in ${staged.files.length} files (limits: ${sc.max_fix_lines} lines, ${sc.max_fix_files} files); nothing was pushed`, paths: conflicted });
     }
     await stageAll(c.cwd);
     return await finish(conflicted, staged.lines);

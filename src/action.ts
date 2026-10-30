@@ -116,6 +116,9 @@ async function shepherdCtx(log: ReturnType<typeof logs>): Promise<ShepherdCtx> {
   // Policy comes from the BASE branch of the PR (the default branch for comment events).
   const pl = github.context.payload;
   let base: { ref?: string; sha?: string } | undefined = pl.pull_request?.base ?? pl.workflow_run?.pull_requests?.[0]?.base ?? pl.check_suite?.pull_requests?.[0]?.base;
+  // A push to a base branch (the conflict sweep): that branch's config applies. schedule and workflow_dispatch use the default branch.
+  const pushed = github.context.eventName === "push" ? /^refs\/heads\/(.+)$/.exec(String(pl.ref ?? ""))?.[1] : undefined;
+  if (!base && pushed) base = { ref: pushed };
   if (!base && pl.issue?.number) {
     try { base = (await ok.rest.pulls.get({ ...repo, pull_number: pl.issue.number })).data.base; } catch { /* default branch */ }
   }

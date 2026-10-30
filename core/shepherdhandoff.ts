@@ -20,6 +20,13 @@ export interface HandoffInput {
   paths?: string[];
   /** Conflict hunks that need a human. */
   hunks?: { path: string; line: number; ours: string; theirs: string }[];
+  /** Branch names, to label the two sides of a hunk (`main (base)`, `<head> (this PR)`). */
+  baseRef?: string;
+  headRef?: string;
+  /** URL of the CI run that started this, when there is one. */
+  run?: string;
+  /** Full sha of the base commit being merged (conflict work); shown as a commit link. */
+  baseCommit?: string;
 }
 
 const MAX_CHARS = 280;
@@ -34,8 +41,10 @@ export function renderHandoff(h: HandoffInput): string {
     "",
     `**Stopped by:** ${RULE_TITLE[h.rule]}`,
     `**Why:** ${text(h.reason)}`,
-    "",
   ];
+  if (h.run && /^https:\/\/[^\s<>()]+$/.test(h.run)) out.push(`**CI run:** [run](${h.run})`);
+  if (h.baseCommit && /^[0-9a-f]{7,40}$/i.test(h.baseCommit)) out.push(`**Base commit being merged:** [${h.baseCommit.slice(0, 7)}](${h.repoUrl}/commit/${h.baseCommit})`);
+  out.push("");
   if (h.failures?.length) {
     out.push("**What failed:**");
     for (const f of h.failures.slice(0, 5)) out.push(`- ${code(f.job)}: ${code(f.raw || "(no error line found)")} (fingerprint ${code(f.hash)})`);
@@ -52,7 +61,8 @@ export function renderHandoff(h: HandoffInput): string {
   if (h.paths?.length || h.hunks?.length) {
     out.push("**What to look at:**");
     for (const p of (h.paths ?? []).slice(0, 10)) out.push(`- ${code(p)}`);
-    for (const x of (h.hunks ?? []).slice(0, 10)) out.push(`- ${code(`${x.path}:${x.line}`)} ours: ${code(x.ours)} / base: ${code(x.theirs)}`);
+    const ours = `${text(h.headRef || "head")} (this PR):`, theirs = `${text(h.baseRef || "base")} (base):`;
+    for (const x of (h.hunks ?? []).slice(0, 10)) out.push(`- ${code(`${x.path}:${x.line}`)} ${ours} ${code(x.ours)} / ${theirs} ${code(x.theirs)}`);
     out.push("");
   }
   out.push(

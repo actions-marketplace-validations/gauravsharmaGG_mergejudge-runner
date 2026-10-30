@@ -58728,8 +58728,9 @@ var import_node_crypto3 = require("node:crypto");
 var ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
 var TS_PREFIX = /^\s*(?:\d{4}-\d\d-\d\dT[\d:.]+Z\s*)?(?:\[?\d\d:\d\d:\d\d(?:\.\d+)?\]?\s*)?/;
 var stripAnsi = (s) => s.replace(ANSI, "");
+var RUNNER_WORKSPACE = /(?<![\w.])(?:\/(?:home|Users)\/runner\/work\/[\w.@+~-]+\/[\w.@+~-]+|[A-Za-z]:\\a\\[\w.@+~-]+\\[\w.@+~-]+)[\\/]/g;
 function normalizeError(line) {
-  return stripAnsi(line).replace(TS_PREFIX, "").replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, "<id>").replace(/(?<![\w.])(?:[A-Za-z]:)?(?:[\\/][\w.@+~-]+){2,}[\\/]?/g, "<path>").replace(/(?<=[\w>)]):\d+(?::\d+)?/g, "").replace(/\(\d+,\d+\)/g, "").replace(/\b\d+(?:\.\d+)?\s?(?:ms|s|sec|secs|seconds|min|m)\b/gi, "<t>").replace(/\b(?:0x)?[0-9a-f]{7,64}\b/gi, "<hex>").replace(/\b\d+(?:\.\d+)*\b/g, "#").replace(/\s+/g, " ").trim().slice(0, 240);
+  return stripAnsi(line).replace(TS_PREFIX, "").replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, "<id>").replace(RUNNER_WORKSPACE, "").replace(/(?<![\w.])(?:[A-Za-z]:)?(?:[\\/][\w.@+~-]+){2,}[\\/]?/g, (m) => `<path>/${m.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? ""}`).replace(/(?<=[\w>)]):\d+(?::\d+)?/g, "").replace(/\(\d+,\d+\)/g, "").replace(/\b\d+(?:\.\d+)?\s?(?:ms|s|sec|secs|seconds|min|m)\b/gi, "<t>").replace(/\b(?:0x)?[0-9a-f]{7,64}\b/gi, "<hex>").replace(/\b\d+(?:\.\d+)*\b/g, "#").replace(/\s+/g, " ").trim().slice(0, 240);
 }
 var FAILURE_PATTERNS = [
   /^\s*(?:FAIL|FAILED)\b/,
@@ -58756,7 +58757,7 @@ function firstFailureLine(log) {
     const detail = hits.slice(1).find((l) => !BARE_HEADER.test(l));
     return detail ? `${head} | ${detail.trim()}` : head;
   }
-  const tail = lines.filter((l) => l.trim() && !NOISE.test(l.trim())).slice(-3).map((l) => l.trim());
+  const tail = lines.filter((l) => l.trim() && !NOISE.test(l.trim()) && !/^>\s/.test(l)).slice(-3).map((l) => l.trim());
   return tail.join(" | ");
 }
 function countFailingTests(log) {
@@ -58801,6 +58802,29 @@ function countFailingChecks(checkRuns, statuses, required2, excludeNames = []) {
     else if (FAILING_STATUS.has(s.state)) failing++;
   }
   return { failing, pending };
+}
+var GH_TS = /^(?:\uFEFF)?\d{4}-\d\d-\d\dT[\d:.]+Z ?/;
+var JOB_EPILOGUE = /^(?:Post job cleanup\.|Cleaning up orphan processes|Evaluate and set job outputs)/;
+var STEP_ERROR = /^##\[error\]Process completed with exit code/;
+var RUNNER_NOISE = /^(?:\[command\]|##\[(?:group|endgroup|warning|debug|notice)\])/;
+function extractFailureSection(raw) {
+  const all = stripAnsi(raw).split(/\r?\n/).map((l) => l.replace(GH_TS, ""));
+  let end = all.findIndex((l) => JOB_EPILOGUE.test(l));
+  if (end < 0) end = all.length;
+  const stepEnd = all.slice(0, end).findIndex((l) => STEP_ERROR.test(l));
+  const stop = stepEnd >= 0 ? stepEnd : end;
+  let start = 0;
+  for (let i = stop - 1; i >= 0; i--) {
+    if (!all[i].startsWith("##[group]Run ")) continue;
+    start = i + 1;
+    while (start < stop && !all[start].startsWith("##[endgroup]")) start++;
+    start++;
+    break;
+  }
+  const keep = (l) => !RUNNER_NOISE.test(l);
+  const unwrap = (l) => l.replace(/^##\[error\]/, "");
+  const section = all.slice(start, stop).filter(keep).map(unwrap).join("\n").trim();
+  return section || all.slice(0, end).filter(keep).map(unwrap).join("\n").trim();
 }
 function tailLog(log, lines = 200, maxChars = 2e4) {
   const t = stripAnsi(log).split(/\r?\n/).slice(-lines).join("\n");
@@ -58994,9 +59018,11 @@ function renderHandoff(h) {
     "### \u{1F411} MergeJudge Shepherd stopped and needs a human",
     "",
     `**Stopped by:** ${RULE_TITLE[h.rule]}`,
-    `**Why:** ${text(h.reason)}`,
-    ""
+    `**Why:** ${text(h.reason)}`
   ];
+  if (h.run && /^https:\/\/[^\s<>()]+$/.test(h.run)) out.push(`**CI run:** [run](${h.run})`);
+  if (h.baseCommit && /^[0-9a-f]{7,40}$/i.test(h.baseCommit)) out.push(`**Base commit being merged:** [${h.baseCommit.slice(0, 7)}](${h.repoUrl}/commit/${h.baseCommit})`);
+  out.push("");
   if (h.failures?.length) {
     out.push("**What failed:**");
     for (const f of h.failures.slice(0, 5)) out.push(`- ${code2(f.job)}: ${code2(f.raw || "(no error line found)")} (fingerprint ${code2(f.hash)})`);
@@ -59013,7 +59039,8 @@ function renderHandoff(h) {
   if (h.paths?.length || h.hunks?.length) {
     out.push("**What to look at:**");
     for (const p of (h.paths ?? []).slice(0, 10)) out.push(`- ${code2(p)}`);
-    for (const x of (h.hunks ?? []).slice(0, 10)) out.push(`- ${code2(`${x.path}:${x.line}`)} ours: ${code2(x.ours)} / base: ${code2(x.theirs)}`);
+    const ours = `${text(h.headRef || "head")} (this PR):`, theirs = `${text(h.baseRef || "base")} (base):`;
+    for (const x of (h.hunks ?? []).slice(0, 10)) out.push(`- ${code2(`${x.path}:${x.line}`)} ${ours} ${code2(x.ours)} / ${theirs} ${code2(x.theirs)}`);
     out.push("");
   }
   out.push(
@@ -59182,14 +59209,72 @@ function renderShepherdComment(state, repoUrl2) {
   );
   return out.join("\n");
 }
+var ownStateComments = (comments, selfLogin) => comments.filter((c) => isOwnStateComment(c, selfLogin)).sort((a, b) => a.id - b.id);
+var grantKey = (g2) => g2.comment != null ? `c${g2.comment}` : `${g2.who}@${g2.at}`;
+var entryKey = (e) => JSON.stringify([e.at, e.kind, e.what, e.changed, e.result, e.commit, e.run]);
+function mergeGrants(base, others) {
+  const log = [...base.grantLog];
+  const seen = new Set(log.map(grantKey));
+  let extra = 0;
+  for (const g2 of others.flatMap((o) => o.grantLog)) if (!seen.has(grantKey(g2))) {
+    seen.add(grantKey(g2));
+    log.push(g2);
+    extra++;
+  }
+  const grants = Math.max(base.grants + extra, ...others.map((o) => o.grants), log.length);
+  return extra || grants !== base.grants ? { ...base, grants, grantLog: log.slice(-MAX_ENTRIES) } : base;
+}
+function mergeStates(base, others) {
+  const all = [base, ...others];
+  const seen = /* @__PURE__ */ new Set();
+  const entries = all.flatMap((x) => x.entries).filter((e) => !seen.has(entryKey(e)) && seen.add(entryKey(e))).sort((a, b) => a.at.localeCompare(b.at)).slice(-MAX_ENTRIES);
+  const newest = all.reduce((best, x) => (x.entries.at(-1)?.at ?? "") >= (best.entries.at(-1)?.at ?? "") ? x : best, base);
+  return { ...mergeGrants(newest, all.filter((x) => x !== newest)), entries };
+}
+function readShepherdState(comments, selfLogin) {
+  const [first, ...rest] = ownStateComments(comments, selfLogin);
+  const base = parseShepherdState(first?.body);
+  if (!base) return null;
+  return mergeGrants(base, rest.map((c) => parseShepherdState(c.body)).filter((x) => !!x));
+}
+var SUPERSEDED_MARKER = "<!-- mergejudge:shepherd-superseded -->";
+async function retire(ok, r, pull, extras, liveId) {
+  const link = `https://github.com/${r.owner}/${r.repo}/pull/${pull}#issuecomment-${liveId}`;
+  for (const c of extras) {
+    try {
+      await ok.rest.issues.deleteComment({ ...r, comment_id: c.id });
+    } catch (e) {
+      if (e.status === 404) continue;
+      await ok.rest.issues.updateComment({ ...r, comment_id: c.id, body: `${SUPERSEDED_MARKER}
+Superseded by ${link}.` }).catch(() => void 0);
+    }
+  }
+}
 async function upsertShepherdComment(ok, r, pull, next, selfLogin) {
-  const comments = await ok.paginate(ok.rest.issues.listComments, { ...r, issue_number: pull, per_page: 100 });
-  const existing = comments.find((c) => isOwnStateComment(c, selfLogin));
-  const state = typeof next === "function" ? next(parseShepherdState(existing?.body)) : next;
-  const body = renderShepherdComment(state, `https://github.com/${r.owner}/${r.repo}`);
-  if (existing) await ok.rest.issues.updateComment({ ...r, comment_id: existing.id, body });
-  else await ok.rest.issues.createComment({ ...r, issue_number: pull, body });
-  return state;
+  const url2 = `https://github.com/${r.owner}/${r.repo}`;
+  const list2 = () => ok.paginate(ok.rest.issues.listComments, { ...r, issue_number: pull, per_page: 100 });
+  const parsed = (cs) => cs.map((c) => parseShepherdState(c.body)).filter((x) => !!x);
+  const own2 = ownStateComments(await list2(), selfLogin);
+  const existing = own2[0];
+  const prev = parseShepherdState(existing?.body);
+  const folded = prev ? mergeStates(prev, parsed(own2.slice(1))) : prev;
+  const state = typeof next === "function" ? next(folded) : next;
+  if (existing) {
+    await ok.rest.issues.updateComment({ ...r, comment_id: existing.id, body: renderShepherdComment(state, url2) });
+    await retire(ok, r, pull, own2.slice(1), existing.id);
+    return state;
+  }
+  const created = await ok.rest.issues.createComment({ ...r, issue_number: pull, body: renderShepherdComment(state, url2) });
+  const myId = created?.data?.id;
+  if (myId == null) return state;
+  const after = ownStateComments(await list2(), selfLogin);
+  const winner = after[0];
+  if (!winner || winner.id === myId && after.length < 2) return state;
+  const others = after.slice(1);
+  const merged = mergeStates(parseShepherdState(winner.body) ?? state, [...parsed(others.filter((c) => c.id !== myId)), ...winner.id === myId ? [] : [state]]);
+  await ok.rest.issues.updateComment({ ...r, comment_id: winner.id, body: renderShepherdComment(merged, url2) });
+  await retire(ok, r, pull, others, winner.id);
+  return merged;
 }
 
 // src/config.ts
@@ -59708,7 +59793,7 @@ function routeAutoMode(event, p) {
     const human = p.comment?.user?.type !== "Bot" && p.sender?.type !== "Bot" && !body.includes(SHEPHERD_MARKER) && !body.includes(HANDOFF_MARKER);
     return p.issue?.pull_request && human && parseShepherdCommand(body) ? "shepherd" : "feedback";
   }
-  if (event === "workflow_run" || event === "check_suite" || event === "status") return "shepherd";
+  if (event === "workflow_run" || event === "check_suite" || event === "status" || event === "push") return "shepherd";
   if (event === "pull_request" && (p.action === "labeled" || p.action === "unlabeled")) {
     const l = (p.label?.name ?? "").toLowerCase();
     if (l === SHEPHERD_LABEL || l === NEEDS_HUMAN_LABEL) return "shepherd";
@@ -59882,6 +59967,7 @@ var DEFAULT_IDENTITY = { name: "mergejudge-shepherd[bot]", email: "mergejudge-sh
 var g = async (cwd, args, input2) => (await runGit(args, { cwd, input: input2 })).stdout.trim();
 var idArgs = (id) => ["-c", `user.name=${id.name}`, "-c", `user.email=${id.email}`, "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false"];
 var headSha = (cwd) => g(cwd, ["rev-parse", "HEAD"]);
+var refSha = async (cwd, ref) => (await runGit(["rev-parse", "--verify", "-q", `${ref}^{commit}`], { cwd, allowFail: true })).stdout.trim() || void 0;
 async function checkoutHead(cwd, headRef, expectSha) {
   await runGit(["fetch", "--no-tags", "origin", `+refs/heads/${headRef}:refs/remotes/origin/${headRef}`], { cwd });
   await runGit(["checkout", "-q", "-B", headRef, `refs/remotes/origin/${headRef}`], { cwd });
@@ -59972,8 +60058,7 @@ async function removeLabel(c, n, label) {
 }
 async function readState(c, n) {
   const comments = await c.ok.paginate(c.ok.rest.issues.listComments, { ...c.repo, issue_number: n, per_page: 100 });
-  const mine = comments.find((x) => isOwnStateComment(x, c.botLogin));
-  return parseShepherdState(mine?.body);
+  return readShepherdState(comments, c.botLogin);
 }
 var capOf = (c, state) => effectiveCap(c.cfg.shepherd.max_attempts, state?.grants);
 async function history(c, n) {
@@ -60005,10 +60090,14 @@ async function handOff(c, pull, a) {
     failures: a.failures,
     paths: a.paths,
     hunks: a.hunks,
+    baseRef: a.baseRef,
+    headRef: a.headRef,
+    run: a.run,
+    baseCommit: a.baseCommit,
     attempts: hist.records.map((r) => ({ ...r, run: runOf(r.sha) }))
   });
   await c.ok.rest.issues.createComment({ ...c.repo, issue_number: pull, body });
-  await note(c, pull, hist, { kind: "info", what: RULE_TITLE[a.rule], changed: "nothing pushed", result: `Stopped: ${a.reason}` }, { on: false, status: RULE_STATUS[a.rule] });
+  await note(c, pull, hist, { kind: "info", what: RULE_TITLE[a.rule], changed: "nothing pushed", result: `Stopped: ${a.reason}`, run: a.run, commit: a.baseCommit }, { on: false, status: RULE_STATUS[a.rule] });
   c.log.info(`Shepherd hand-off #${pull}: ${RULE_TITLE[a.rule]} (${a.reason}).`);
 }
 async function runShepherd(c, eventName, p) {
@@ -60028,6 +60117,10 @@ async function runShepherd(c, eventName, p) {
       return onCheckSuite(c, p);
     case "status":
       return onStatus(c, p);
+    case "push":
+    case "schedule":
+    case "workflow_dispatch":
+      return onSweep(c, eventName, p);
     default:
       c.log.info(`Shepherd ignores the ${eventName} event.`);
   }
@@ -60180,17 +60273,123 @@ async function onHeadChanged(c, pr, skipConflict = false) {
   }
   if (!skipConflict && !green) await conflictCheck(c, pr);
 }
+var SWEEP_MAX_PRS = 10;
+var SWEEP_MAX_SCAN = 100;
+var MERGEABLE_BACKOFF_MS = [1e3, 2e3, 4e3];
+var ownPush = (c, p) => isShepherdCommitMessage(p.head_commit?.message) || !!c.botLogin && p.sender?.login === c.botLogin;
+async function mergeComputedOn(c, pr) {
+  const sha = pr.merge_commit_sha;
+  if (!sha) return "";
+  try {
+    const { data } = await c.ok.rest.repos.getCommit({ ...c.repo, ref: sha });
+    return data.parents?.[0]?.sha ?? "";
+  } catch {
+    return "";
+  }
+}
+async function mergeableOf(c, n, baseTip) {
+  let pr = await loadPull(c, n);
+  for (let i = 0; ; i++) {
+    let res = { pr, gap: "unknown" };
+    if (pr.mergeable === false || pr.mergeable_state === "dirty" || pr.mergeable === true && !baseTip) return { pr };
+    if (pr.mergeable === true) {
+      const computedOn = await mergeComputedOn(c, pr);
+      if (computedOn === baseTip) return { pr };
+      res = { pr, gap: "stale", computedOn };
+    }
+    if (i >= MERGEABLE_BACKOFF_MS.length) return res;
+    await (c.sleep ?? ((t) => new Promise((r) => setTimeout(r, t))))(MERGEABLE_BACKOFF_MS[i]);
+    pr = await loadPull(c, n);
+  }
+}
+var shq = (s) => "'" + s.split("'").join("'\\''") + "'";
+async function localMergeCheck(c, pr, baseTip) {
+  const head = pr.head.sha;
+  if (!/^[0-9a-f]{40,64}$/i.test(baseTip) || !/^[0-9a-f]{40,64}$/i.test(head)) return "unknown";
+  let got = await sh(`git fetch --no-tags origin ${baseTip} ${head}`, c.cwd);
+  if (got.code !== 0) got = await sh(`git fetch --no-tags origin ${shq(pr.base.ref)} ${shq(pr.head.ref)}`, c.cwd);
+  if (got.code !== 0) return "unknown";
+  if ((await sh(`git cat-file -e ${baseTip}^{commit} && git cat-file -e ${head}^{commit}`, c.cwd)).code !== 0) return "unknown";
+  const r = await sh(`git merge-tree --write-tree --no-messages ${baseTip} ${head}`, c.cwd);
+  return r.code === 1 ? "conflict" : r.code === 0 ? "clean" : "unknown";
+}
+async function onSweep(c, ev, p) {
+  let base;
+  if (ev === "push") {
+    const m = /^refs\/heads\/(.+)$/.exec(p.ref ?? "");
+    if (!m || p.deleted) {
+      c.log.info("push is not to a branch tip; ignoring.");
+      return;
+    }
+    if (ownPush(c, p)) {
+      c.log.info("Ignoring a push made by Shepherd itself.");
+      return;
+    }
+    base = m[1];
+  }
+  const baseTips = /* @__PURE__ */ new Map();
+  if (base && p.after && /^[0-9a-f]+$/i.test(p.after)) baseTips.set(base, p.after);
+  const tipOf = async (ref) => {
+    if (!baseTips.has(ref)) {
+      try {
+        baseTips.set(ref, (await c.ok.rest.git.getRef({ ...c.repo, ref: `heads/${ref}` })).data.object.sha);
+      } catch (e) {
+        warn(c, `Could not read the tip of ${ref}: ${e.message}`);
+        baseTips.set(ref, void 0);
+      }
+    }
+    return baseTips.get(ref);
+  };
+  const open3 = await c.ok.paginate(c.ok.rest.pulls.list, { ...c.repo, state: "open", ...base ? { base } : {}, sort: "created", direction: "asc", per_page: 100 });
+  let looked = 0, scanned = 0;
+  for (const raw of open3) {
+    if (looked >= SWEEP_MAX_PRS || scanned >= SWEEP_MAX_SCAN) {
+      c.log.info(`Sweep limit reached (${SWEEP_MAX_PRS} shepherded PRs per run); the rest wait for the next sweep.`);
+      break;
+    }
+    scanned++;
+    if (raw.draft || raw.state !== "open" || hasLabel(raw, NEEDS_HUMAN_LABEL)) continue;
+    if (!raw.head.repo?.full_name || raw.head.repo.full_name !== raw.base.repo.full_name) continue;
+    if (!hasLabel(raw, SHEPHERD_LABEL) && !(await readState(c, raw.number))?.on) continue;
+    looked++;
+    try {
+      const baseTip = await tipOf(raw.base.ref);
+      const { pr, gap, computedOn } = await mergeableOf(c, raw.number, baseTip);
+      if (pr.state !== "open") continue;
+      if (gap && baseTip) {
+        if (gap === "stale") c.log.info(`#${pr.number}: GitHub's mergeable answer is stale (computed against ${computedOn ? computedOn.slice(0, 7) : "an unknown base"}, base is ${baseTip.slice(0, 7)}); checking the merge locally.`);
+        else c.log.info(`#${pr.number}: GitHub has not computed mergeable; checking the merge locally.`);
+        const local = await localMergeCheck(c, pr, baseTip);
+        if (local === "conflict") {
+          c.log.info(`#${pr.number}: a local merge check of ${baseTip.slice(0, 7)} and ${pr.head.sha.slice(0, 7)} finds a merge conflict.`);
+          await conflictCheck(c, { ...pr, mergeable: false });
+        } else c.log.info(`#${pr.number}: ${local === "clean" ? "the local merge check finds no merge conflict" : "the local merge check could not decide"}; the sweep leaves it.`);
+        continue;
+      }
+      if (pr.mergeable === false || pr.mergeable_state === "dirty") await conflictCheck(c, pr.mergeable === false ? pr : { ...pr, mergeable: false });
+      else c.log.info(`#${pr.number} ${pr.mergeable ? "has no merge conflict" : "mergeable state is still unknown"}; the sweep leaves it.`);
+    } catch (e) {
+      warn(c, `Sweep of #${raw.number} failed: ${e.message}`);
+    }
+  }
+}
 async function turnOff(c, pr, actor) {
   if (hasLabel(pr, SHEPHERD_LABEL)) await removeLabel(c, pr.number, SHEPHERD_LABEL);
+  if ((await readState(c, pr.number))?.status === "off") {
+    c.log.info(`Shepherd is already off for #${pr.number}; nothing to log.`);
+    return;
+  }
   const hist = await history(c, pr.number);
   await note(c, pr.number, hist, { kind: "info", what: "Shepherd turned off", changed: "nothing", result: `Off, by ${actor}` }, { on: false, status: "off" });
   c.log.info(`Shepherd off for #${pr.number}.`);
 }
 async function turnOn(c, pr, actor, how = "on", commentId) {
+  const wasOn = how === "on" && hasLabel(pr, SHEPHERD_LABEL) && !hasLabel(pr, NEEDS_HUMAN_LABEL);
+  const prev = wasOn ? await readState(c, pr.number) : null;
   if (!hasLabel(pr, SHEPHERD_LABEL)) await addLabel(c, pr.number, SHEPHERD_LABEL);
   if (hasLabel(pr, NEEDS_HUMAN_LABEL)) await removeLabel(c, pr.number, NEEDS_HUMAN_LABEL);
   const hist = await history(c, pr.number);
-  const state = how === "retry" ? await setState(c, pr.number, hist, (s) => addEntry(addGrant({ ...s, on: true, status: "watching" }, { who: actor, at: nowIso(c), comment: commentId }), { at: nowIso(c), kind: "info", what: "Retry granted", changed: "nothing", result: `+1 fix attempt, by ${actor}` })) : await note(c, pr.number, hist, { kind: "info", what: how === "on" ? "Shepherd turned on" : "Shepherd resumed", changed: "nothing", result: `Watching, by ${actor}` }, { on: true, status: "watching" });
+  const state = prev?.on ? prev : how === "retry" ? await setState(c, pr.number, hist, (s) => addEntry(addGrant({ ...s, on: true, status: "watching" }, { who: actor, at: nowIso(c), comment: commentId }), { at: nowIso(c), kind: "info", what: "Retry granted", changed: "nothing", result: `+1 fix attempt, by ${actor}` })) : await note(c, pr.number, hist, { kind: "info", what: how === "on" ? "Shepherd turned on" : "Shepherd resumed", changed: "nothing", result: `Watching, by ${actor}` }, { on: true, status: "watching" });
   c.log.info(`Shepherd ${how} for #${pr.number}.`);
   const cap2 = capOf(c, state);
   if (hist.attempts >= cap2) {
@@ -60198,7 +60397,33 @@ async function turnOn(c, pr, actor, how = "on", commentId) {
     return;
   }
   await conflictCheck(c, pr);
+  if (how === "retry") await recheckFailedRun(c, pr);
 }
+async function recheckFailedRun(c, before) {
+  const pr = await loadPull(c, before.number);
+  if (pr.state !== "open" || !hasLabel(pr, SHEPHERD_LABEL) || hasLabel(pr, NEEDS_HUMAN_LABEL) || pr.head.sha !== before.head.sha) return;
+  const state = await readState(c, pr.number);
+  if (!state?.on) return;
+  const runs = await c.ok.paginate(c.ok.rest.actions.listWorkflowRunsForRepo, { ...c.repo, head_sha: pr.head.sha, status: "completed", per_page: 100 });
+  const mine = (r) => !!c.self?.name && r.name === c.self.name || !!r.path && !!c.self?.ref?.includes(r.path);
+  const latest = /* @__PURE__ */ new Map();
+  for (const r of runs) {
+    if (mine(r)) continue;
+    const key = String(r.workflow_id ?? r.name);
+    if (!latest.has(key) || r.id > latest.get(key).id) latest.set(key, r);
+  }
+  const failed = [...latest.values()].filter((r) => r.conclusion && RETRY_RECHECK.has(r.conclusion)).sort((a, b) => b.id - a.id)[0];
+  if (!failed) {
+    c.log.info(`#${pr.number}: no failed run on the head ${pr.head.sha.slice(0, 7)} to re-check after the retry.`);
+    return;
+  }
+  const runUrl = `${repoUrl(c)}/actions/runs/${failed.id}`;
+  c.log.info(`#${pr.number}: re-checking the failed run ${failed.id} after the retry.`);
+  const hist = await history(c, pr.number);
+  await note(c, pr.number, hist, { kind: "ci", what: `Run ${failed.name ?? failed.id} is still failing on the head`, changed: "nothing yet", result: "Retry: Shepherd looks at this failed run again", commit: pr.head.sha, run: runUrl });
+  await evaluateFailedRun(c, pr, { id: failed.id, conclusion: failed.conclusion, attempt: failed.run_attempt ?? 1 }, await readState(c, pr.number), hist, false);
+}
+var RETRY_RECHECK = /* @__PURE__ */ new Set(["failure", "timed_out", "startup_failure"]);
 async function requiredChecks(c, base) {
   const out = /* @__PURE__ */ new Set();
   try {
@@ -60348,7 +60573,7 @@ async function evaluateFailedRun(c, pr, run2, state, hist, recheck) {
     } catch (e) {
       warn(c, `Could not download the log of job ${j.name}: ${e.message}`);
     }
-    logs2[j.name] = redactLog(tailLog(raw, 200, 2e4));
+    logs2[j.name] = redactLog(tailLog(extractFailureSection(raw), 200, 2e4));
     fps.push(fingerprintFailure(j.name, logs2[j.name]));
   }
   const cantFix = classifyFailure(failedJobs.map((j) => ({ name: j.name, conclusion: j.conclusion })), logs2, (f) => isProtectedPath(f, c.cfg));
@@ -60389,7 +60614,7 @@ async function act(c, pr, d, f) {
       await note(c, n, f.hist, { kind: "ci", what, changed: "nothing pushed", result: "Re-running failed jobs to rule out a flaky test (no attempt counted)", run: f.runUrl });
       return;
     case "handoff":
-      return handOff(c, n, { rule: d.rule, reason: d.reason, question: d.question, failures: f.fps });
+      return handOff(c, n, { rule: d.rule, reason: d.reason, question: d.question, failures: f.fps, run: f.runUrl });
     case "fix":
       return fixCi(c, pr, d.attempt, f);
   }
@@ -60495,21 +60720,21 @@ async function fixCi(c, pr, attempt, f) {
         c.log.info(fix.skip);
         return;
       }
-      return handOff(c, n, { ...fix.hand, failures: f.fps });
+      return handOff(c, n, { ...fix.hand, failures: f.fps, run: f.runUrl });
     }
     const staged = await stageAll(c.cwd);
     if (!staged.files.length) {
       await resetClean(c.cwd);
-      return handOff(c, n, { rule: RULE.H4, reason: "the fix changed nothing", failures: f.fps });
+      return handOff(c, n, { rule: RULE.H4, reason: "the fix changed nothing", failures: f.fps, run: f.runUrl });
     }
     const hits = protectedHits(staged.files, { shepherd: sc });
     if (hits.length) {
       await resetClean(c.cwd);
-      return handOff(c, n, { rule: RULE.H1, reason: "the fix needs a protected path; nothing was pushed", paths: hits, failures: f.fps });
+      return handOff(c, n, { rule: RULE.H1, reason: "the fix needs a protected path; nothing was pushed", paths: hits, failures: f.fps, run: f.runUrl });
     }
     if (staged.lines > sc.max_fix_lines || staged.files.length > sc.max_fix_files) {
       await resetClean(c.cwd);
-      return handOff(c, n, { rule: RULE.H2, reason: `the fix changes ${staged.lines} lines in ${staged.files.length} files (limits: ${sc.max_fix_lines} lines, ${sc.max_fix_files} files); nothing was pushed`, paths: staged.files, failures: f.fps });
+      return handOff(c, n, { rule: RULE.H2, reason: `the fix changes ${staged.lines} lines in ${staged.files.length} files (limits: ${sc.max_fix_lines} lines, ${sc.max_fix_files} files); nothing was pushed`, paths: staged.files, failures: f.fps, run: f.runUrl });
     }
     const job = f.fps[0]?.job ?? "CI";
     const message = buildCommitMessage({
@@ -60561,15 +60786,17 @@ async function conflictCheck(c, prIn) {
     return;
   }
   const attempt = hist.attempts + 1;
-  const incomingGuard = async () => {
+  let baseCommit;
+  const hand2 = (a) => handOff(c, n, { baseRef: pr.base.ref, headRef: pr.head.ref, baseCommit, ...a });
+  const incomingGuard = async (conflicted = []) => {
     const incoming = protectedHits(await incomingPaths(c.cwd, pr.head.sha), { shepherd: sc });
     if (!incoming.length) return false;
     await resetClean(c.cwd);
-    await handOff(c, n, { rule: RULE.H1, reason: `merging ${pr.base.ref} would bring changes to protected files into this PR; the merge was aborted and nothing was pushed`, paths: incoming });
+    const inConflict = incoming.some((p) => conflicted.includes(p));
+    await hand2({ rule: RULE.H1, reason: inConflict ? "the merge conflict is in a protected path; the merge was aborted and nothing was pushed" : `merging ${pr.base.ref} would bring changes to protected files into this PR; the merge was aborted and nothing was pushed`, paths: incoming });
     return true;
   };
   const finish = async (touched, lines) => {
-    if (await incomingGuard()) return;
     const message = buildCommitMessage({ subject: `shepherd: resolve merge conflicts with ${pr.base.ref} (attempt ${attempt}/${cap2})`, attempt, kind: "conflict" });
     const sha = await commitStaged(c.cwd, message, c.identity ?? DEFAULT_IDENTITY);
     const pushed = await pushHead(c.cwd, pr.head.ref, { token: c.token, serverUrl: c.serverUrl, onSecret: c.onSecret });
@@ -60587,13 +60814,10 @@ async function conflictCheck(c, prIn) {
       c.log.info("Base is already merged; nothing to resolve.");
       return;
     }
+    baseCommit = await refSha(c.cwd, `refs/remotes/origin/${pr.base.ref}`);
+    if (await incomingGuard(start.state === "conflict" ? start.conflicted : [])) return;
     if (start.state === "clean") return await finish([], 0);
     const conflicted = start.conflicted;
-    const hits = protectedHits(conflicted, { shepherd: sc });
-    if (hits.length) {
-      await resetClean(c.cwd);
-      return handOff(c, n, { rule: RULE.H1, reason: "the merge conflict is in a protected path; nothing was pushed", paths: hits });
-    }
     const hunks = [];
     const locks = [];
     for (const path2 of conflicted) {
@@ -60607,7 +60831,7 @@ async function conflictCheck(c, prIn) {
     }
     if (hunks.length) {
       await resetClean(c.cwd);
-      return handOff(c, n, { rule: RULE.H4, reason: "both sides changed the same logic; `git merge --abort` was run and nothing was pushed", hunks, paths: [...new Set(hunks.map((h) => h.path))] });
+      return hand2({ rule: RULE.H4, reason: "both sides changed the same logic; `git merge --abort` was run and nothing was pushed", hunks, paths: [...new Set(hunks.map((h) => h.path))] });
     }
     const mine = locks.length ? await changedByPr(c.cwd, await mergeBase(c.cwd, pr.base.ref)) : /* @__PURE__ */ new Set();
     for (const lock of locks) {
@@ -60621,28 +60845,27 @@ async function conflictCheck(c, prIn) {
         if (manifestChanged) {
           if (!await (c.npmAvailable ?? npmAvailable)(c.cwd)) {
             await resetClean(c.cwd);
-            return handOff(c, n, { rule: RULE.H4, reason: "package-lock.json conflicts and npm is not available to regenerate it", paths: [lock] });
+            return hand2({ rule: RULE.H4, reason: "package-lock.json conflicts and npm is not available to regenerate it", paths: [lock] });
           }
           const r = await (c.runCommand ?? sh)("npm install --package-lock-only --ignore-scripts", (0, import_node_path.join)(c.cwd, (0, import_node_path.dirname)(lock)));
           if (r.code !== 0) {
             await resetClean(c.cwd);
-            return handOff(c, n, { rule: RULE.H4, reason: "regenerating package-lock.json failed", paths: [lock] });
+            return hand2({ rule: RULE.H4, reason: "regenerating package-lock.json failed", paths: [lock] });
           }
         }
       } else if (manifestChanged) {
         await resetClean(c.cwd);
-        return handOff(c, n, { rule: RULE.H4, reason: `${lock} conflicts and this PR also changed its manifest, which Shepherd cannot regenerate`, paths: [lock] });
+        return hand2({ rule: RULE.H4, reason: `${lock} conflicts and this PR also changed its manifest, which Shepherd cannot regenerate`, paths: [lock] });
       } else await takeTheirs(c.cwd, lock);
     }
     for (const path2 of conflicted) if (/^(<{7}|>{7}) /m.test((0, import_node_fs.readFileSync)((0, import_node_path.join)(c.cwd, path2), "utf8"))) {
       await resetClean(c.cwd);
-      return handOff(c, n, { rule: RULE.H4, reason: "conflict markers remained after the mechanical resolution", paths: [path2] });
+      return hand2({ rule: RULE.H4, reason: "conflict markers remained after the mechanical resolution", paths: [path2] });
     }
     const staged = await stageAll(c.cwd, conflicted);
-    if (await incomingGuard()) return;
     if (staged.lines > sc.max_fix_lines || staged.files.length > sc.max_fix_files) {
       await resetClean(c.cwd);
-      return handOff(c, n, { rule: RULE.H2, reason: `the resolution changes ${staged.lines} lines in ${staged.files.length} files (limits: ${sc.max_fix_lines} lines, ${sc.max_fix_files} files); nothing was pushed`, paths: conflicted });
+      return hand2({ rule: RULE.H2, reason: `the resolution changes ${staged.lines} lines in ${staged.files.length} files (limits: ${sc.max_fix_lines} lines, ${sc.max_fix_files} files); nothing was pushed`, paths: conflicted });
     }
     await stageAll(c.cwd);
     return await finish(conflicted, staged.lines);
@@ -60855,6 +61078,8 @@ async function shepherdCtx(log) {
   const defaultBranch = context2.payload.repository?.default_branch ?? "main";
   const pl = context2.payload;
   let base = pl.pull_request?.base ?? pl.workflow_run?.pull_requests?.[0]?.base ?? pl.check_suite?.pull_requests?.[0]?.base;
+  const pushed = context2.eventName === "push" ? /^refs\/heads\/(.+)$/.exec(String(pl.ref ?? ""))?.[1] : void 0;
+  if (!base && pushed) base = { ref: pushed };
   if (!base && pl.issue?.number) {
     try {
       base = (await ok.rest.pulls.get({ ...repo, pull_number: pl.issue.number })).data.base;

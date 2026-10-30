@@ -18,7 +18,7 @@ inputs:
     description: Optional GitHub App private key (PEM). Pass it from a secret.
     required: false
   mode:
-    description: "auto (default) | triage | feedback | propose. auto picks from the GitHub event."
+    description: "auto (default) | triage | feedback | propose | shepherd. auto picks from the GitHub event. shepherd watches PRs with the shepherd label and fixes failed CI and merge conflicts (see examples/shepherd-workflow.yml)."
     default: auto
   review_mode:
     description: "fast (default) or deep. deep runs a second pass for cross-hunk, concurrency, security, data and API defects. A second-pass finding is kept only when its quote matches the diff. Same switch as ai.mode in .mergejudge.yml, MERGEJUDGE_MODE, and INPUT_REVIEW_MODE (the env name Actions sets for this input). Deterministic base-branch rules stay the floor. auto means low risk, not a guarantee."
@@ -38,6 +38,15 @@ inputs:
   api_key_env:
     description: Override provider.api_key_env (name of the env var holding the key).
     required: false
+  shepherd_fix_command:
+    description: "Shepherd only. Optional command run first to fix a CI failure, e.g. `npm run lint -- --fix`. It comes from your own workflow file. If it changes files, that diff is the fix (still subject to protected paths and size limits) and no model is called."
+    required: false
+  shepherd_commit_name:
+    description: Shepherd only. Git author and committer name for fix commits.
+    default: mergejudge-shepherd[bot]
+  shepherd_commit_email:
+    description: Shepherd only. Git author and committer email for fix commits.
+    default: mergejudge-shepherd[bot]@users.noreply.github.com
 outputs:
   lane:
     description: Overall lane (auto, review or block).

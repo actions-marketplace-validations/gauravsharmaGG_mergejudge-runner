@@ -24,6 +24,9 @@ import { reviewGuard } from "./shepherdhandoff.js";
 import { addEntry, isProtectedPath, isShepherdOn, newShepherdState, upsertShepherdComment } from "./shepherd.js";
 import { runSecondPass } from "./secondpass.js";
 import { aiModeOf } from "./aimode.js";
+import { generateStory, storySvgHash } from "./storycall.js";
+import { renderStorySvg } from "./storysvg.js";
+import type { Story } from "./story.js";
 
 /** Rules-only note when the model call or its JSON could not be used. The class only: no provider body, no model text. */
 export function aiUnavailableNote(errorClass: string, truncated = false): string {
@@ -47,7 +50,10 @@ export interface ReviewPr {
   html_url?: string;
 }
 
+export type StoryImage = (a: { svg: string; hash: string; prNumber: number }) => Promise<string | null>;
+
 export interface ReviewInput {
+  storyImage?: StoryImage;
   ok: Octokit;
   repo: Repo;
   pr: ReviewPr;
@@ -138,6 +144,10 @@ export interface CachedTriage {
  * /runner/v1. Produced by `produceReviewResult` (no GitHub writes), consumed by `postReviewResult`.
  */
 export interface ReviewResult {
+  story?: Story | null;
+  storyImageUrl?: string | null;
+  storyStyle?: "svg" | "mermaid";
+  storyAnimate?: boolean;
   schemaVersion: 1;
   /** "learning-block": head is the learning branch, LLM skipped; only comment + check are posted. */
   kind: "review" | "learning-block";
@@ -160,6 +170,7 @@ export interface ReviewResult {
 }
 
 export interface ProduceInput {
+  storyImage?: StoryImage;
   /** "owner/repo#pr" for log lines; defaults to "#pr". */
   ref?: string;
   pr: ReviewPr;
@@ -313,7 +324,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
       context = g.pieces;
     }
     const prompt = { title: pr.title ?? "", body: pr.body ?? "", files: kept, context };
-    const tctx = { ...(cfg.comment.flow_chart ? { story: true } : {}), ...(shepherdOn ? { suggestions: (p: string) => !isProtectedPath(p, cfg) } : {}), policyText: policies.text, criteria, learnedText: cfg.learning.enabled ? (o.learnedLines ? renderLearnedSection(o.learnedLines, DELIM) : buildLearnedContext({ learned: o.learned, lessons: o.lessons, outcomeStats: o.outcomeStats }, DELIM)) : "", skippedDiffFiles: skipped, ref: o.ref ?? `#${pr.number}` };
+    const tctx = { ...(shepherdOn ? { suggestions: (p: string) => !isProtectedPath(p, cfg) } : {}), policyText: policies.text, criteria, learnedText: cfg.learning.enabled ? (o.learnedLines ? renderLearnedSection(o.learnedLines, DELIM) : buildLearnedContext({ learned: o.learned, lessons: o.lessons, outcomeStats: o.outcomeStats }, DELIM)) : "", skippedDiffFiles: skipped, ref: o.ref ?? `#${pr.number}` };
     let res = mode === "deep" && tools && canUseTools(provider)
       ? await runDeepTriage(provider, prompt, cfg, tctx, { tools }, log.info, log.warning)
       : await runTriage(provider, prompt, cfg, tctx, log.info, log.warning);
@@ -365,16 +376,30 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
     if (res.suppressed.length || res.downgraded.length)
       notes.push(`Known false alarms in this repo: ${res.suppressed.length} finding(s) hidden, ${res.downgraded.length} listed without an inline comment (manage them in the MergeJudge panel).`);
   }
+  let story: Story | null = null;
+  let storyImageUrl: string | null = null;
+  const storyFiles = excludeFromLlm(files, cfg.diff_exclude).kept;
+  // Cache-only reviews skip the story call as well. All review/second-pass calls are finished here.
+  if (cfg.comment.flow_chart && provider && llm && !cached && !o.skipAi && storyFiles.length) {
+    ({ story } = await generateStory(provider, { files: storyFiles, findings, log }));
+    if (story && cfg.comment.flow_chart_style === "svg" && o.storyImage) {
+      try {
+        const svg = renderStorySvg(story, { animate: cfg.comment.flow_chart_animate });
+        storyImageUrl = await o.storyImage({ svg, hash: await storySvgHash(svg), prNumber: number });
+      } catch { log.warning("PR story image upload failed; showing the text list."); }
+    }
+  }
   o.onNotes?.([...notes]);
   const body = renderComment({
     agg, mode: llm && provider ? provider.label : "rules-only", tokensEstimate: tokens, notes,
     policyFiles: policies.used, fileFindings: findings.filter((f) => f.line === undefined),
     breakdown: breakdown ?? undefined, approval: cfg.approval, laneMap: cfg.review.lane_map, prUrl: pr.html_url,
-    ...(cfg.comment.flow_chart && llm?.story ? { story: llm.story, storyAnimate: cfg.comment.flow_chart_animate } : {}),
+    story, storyImageUrl, storyStyle: cfg.comment.flow_chart_style, storyAnimate: cfg.comment.flow_chart_animate,
     lineFindings: lineFindingsOf(findings),
   });
   return {
     schemaVersion: 1, kind: "review", prNumber: number, headSha: pr.head.sha, prNodeId: pr.node_id,
+    story, storyImageUrl, storyStyle: cfg.comment.flow_chart_style, storyAnimate: cfg.comment.flow_chart_animate,
     lane: agg.lane, agg, body, findings, syncInline: !!llm && !cached && !o.shepherdCommit, ...(shepherdOn ? { shepherd: true } : {}),
     usage: {
       lane: agg.lane, mode: llm && provider ? usedMode : "rules-only", model: provider?.label ?? null,
@@ -490,7 +515,7 @@ export async function runReview(o: ReviewInput): Promise<"auto" | "review" | "bl
   }
   const shepherdCommit = !!head && !reviewGuard(head.message, [], []).syncInline;
   const result = await produceReviewResult({
-    shepherdCommit,
+    shepherdCommit, storyImage: o.storyImage,
     ref: `${repo.owner}/${repo.repo}#${pr.number}`,
     pr, cfg, cfgRef, files, configPaths: o.configPaths, provider, providerNote: note, keyNote: o.keyNote, noProviderNote: o.noProviderNote, reviewNotes, skipAi,
     readRepoFile: (p, ref) => fetchRepoFile(ok, repo, p, ref),

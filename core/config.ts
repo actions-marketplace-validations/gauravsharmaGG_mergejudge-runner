@@ -175,12 +175,14 @@ export const configSchema = z.object({
   /** Sticky comment options. */
   comment: z
     .object({
-      /** Opt-in: the review call also returns a small "PR story" and the sticky shows it as a collapsed mermaid flow chart. Advisory; never changes lanes. */
+      /** Opt-in: a separate call draws a small "PR story" in the sticky. Advisory; never changes lanes. */
       flow_chart: z.boolean().default(false),
-      /** Animate edges on new or changed paths (mermaid v12). Only matters when flow_chart is on. */
+      flow_chart_style: z.enum(["svg", "mermaid"]).default("svg"),
+      flow_chart_host: z.enum(["none", "branch"]).default("none"),
+      /** Animate the SVG subway pulse or new/changed Mermaid edges. Only matters when flow_chart is on. */
       flow_chart_animate: z.boolean().default(true),
     })
-    .default({ flow_chart: false, flow_chart_animate: true }),
+    .default({ flow_chart: false, flow_chart_animate: true, flow_chart_style: "svg", flow_chart_host: "none" }),
   /**
    * How many model passes run over the diff. `fast` (default) is the single pass.
    * `deep` adds a second pass for cross-hunk, concurrency, security, data and API defects.

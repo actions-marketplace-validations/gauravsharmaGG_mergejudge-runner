@@ -63,10 +63,12 @@ export interface RenderInput {
   laneMapImageUrl?: string;
   /** Optional MergeJudge panel URL; adds one link line to the Files section. The sticky stands alone without it. */
   panelUrl?: string;
-  /** comment.flow_chart: the validated PR story, drawn as a collapsed mermaid chart after "What to check". Dropped first when the comment is over the size cap. */
+  /** comment.flow_chart: the validated PR story, drawn as a collapsed SVG image or Mermaid chart after "What to check". Dropped first when the comment is over the size cap. */
   story?: Story | null;
   /** comment.flow_chart_animate (default true): animate edges on new or changed paths. */
   storyAnimate?: boolean;
+  storyStyle?: "svg" | "mermaid";
+  storyImageUrl?: string | null;
 }
 
 /** The findings that carry a verified diff line (the ones that become inline comments). */
@@ -369,8 +371,9 @@ export function renderComment(r: RenderInput): string {
   out.push(escapeMd(agg.summary), "");
   const checks = whatToCheck(r, rubricOpen);
   const rest = [...whyThisLane(r, flagged), ...filesSection(r, flagged, safe), ...allChecks(rubric)];
-  const chart = r.story ? renderStorySection(r.story, r.storyAnimate !== false) : [];
-  const headOf = (withChart: boolean) => [...out, ...checks, ...(withChart ? chart : []), ...rest].join("\n");
+  const chart = r.story ? renderStorySection(r.story, r.storyAnimate !== false, r.storyStyle, r.storyImageUrl) : [];
+  const list = r.story ? renderStorySection(r.story, false, r.storyStyle, null, false) : [];
+  const headOf = (section: string[]) => [...out, ...checks, ...section, ...rest].join("\n");
   // The tail is never cut by the size cap: what was not checked, the feedback block and the footer.
   const unchecked = notChecked(r);
   const tail: string[] = [...(unchecked ? [unchecked] : []), "---", "", renderFeedback(rubric), ""];
@@ -390,8 +393,10 @@ export function renderComment(r: RenderInput): string {
   );
   const tailText = "\n" + tail.join("\n");
   // The chart is the first thing to go when the comment is over the cap.
-  const withChart = headOf(chart.length > 0);
-  return capBody(chart.length && withChart.length + tailText.length > MAX_COMMENT_CHARS ? headOf(false) : withChart, tailText);
+  let head = headOf(chart);
+  if (head.length + tailText.length > MAX_COMMENT_CHARS) head = headOf(list);
+  if (head.length + tailText.length > MAX_COMMENT_CHARS) head = headOf([]);
+  return capBody(head, tailText);
 }
 
 export const CHECK_NAME = "mergejudge/lane";

@@ -34,7 +34,7 @@ export class OpenAiProvider implements LlmProvider {
     this.providerId = transport.providerId ?? "openai";
   }
   private url() { return `${this.baseUrl.replace(/\/+$/, "")}/chat/completions`; }
-  private http(budgetMs?: number): Partial<LlmTransport> { return withCallBudget({ ...this.transport, providerId: this.providerId }, budgetMs); }
+  private http(budgetMs?: number, maxRetries?: number): Partial<LlmTransport> { return withCallBudget({ ...this.transport, providerId: this.providerId }, budgetMs, maxRetries); }
   private empty(): never { throw new LlmError("parse", { provider: this.providerId }); }
   async complete(req: LlmRequest): Promise<string> {
     const r = await this.completeEx(req);
@@ -55,7 +55,7 @@ export class OpenAiProvider implements LlmProvider {
           { role: "user", content: req.user },
         ],
       },
-      this.http(),
+      this.http(req.budgetMs, "maxRetries" in req && typeof req.maxRetries === "number" ? req.maxRetries : undefined),
     )) as { choices?: { message?: { content?: unknown }; finish_reason?: unknown }[]; usage?: OaUsage };
     reportUsage(this.onUsage, oaUsage(data.usage));
     const content = data.choices?.[0]?.message?.content;
@@ -79,7 +79,7 @@ export class OpenAiProvider implements LlmProvider {
         // JSON mode and tools do not mix on every endpoint; it is only requested on the tool-less final turn.
         ...(req.jsonMode && !tools ? { response_format: { type: "json_object" } } : {}),
       },
-      this.http(req.budgetMs),
+      this.http(req.budgetMs, "maxRetries" in req && typeof req.maxRetries === "number" ? req.maxRetries : undefined),
     )) as {
       choices?: { finish_reason?: unknown; message?: { content?: unknown; tool_calls?: { id?: string; function?: { name?: string; arguments?: unknown } }[] } }[];
       usage?: OaUsage;

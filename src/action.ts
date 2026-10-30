@@ -15,6 +15,7 @@ import { redact, redactedLogs } from "./redact.js";
 import { explicitReviewMode, withAiMode } from "./deep.js";
 import { securityRequested, withSecurityMode } from "./security.js";
 import { retrieveFromWorkspace, WorkspaceError } from "./workspace.js";
+import { branchStoryImage } from "../core/storyhost.js";
 
 /** Secrets seen this run. Action log lines are redacted with these plus the shared token/header patterns. */
 const secretSink: string[] = [];
@@ -89,7 +90,10 @@ async function runTriageMode(): Promise<void> {
   if (!pr) { log.info("Not a pull_request event; nothing to do."); return; }
   const { ok, repo, appToken, botLogin } = await auth();
   const { cfg, cfgRef } = await loadCfg(ok, repo, { ref: pr.base?.ref, sha: pr.base?.sha });
+  const storyImage = cfg.comment.flow_chart && cfg.comment.flow_chart_host === "branch"
+    ? await branchStoryImage(ok, repo, github.context.payload.repository?.private, log) : undefined;
   const lane = await runReview({
+    storyImage,
     ok, repo, pr: pr as unknown as ReviewPr, cfg, cfgRef, appToken, botLogin,
     configPaths: [core.getInput("config_path")].filter(Boolean),
     // review.mode: deep reads the repo from the actions/checkout workspace; without one it falls back to context mode.

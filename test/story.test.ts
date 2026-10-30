@@ -1,10 +1,11 @@
+import { STORY_SYSTEM_PROMPT } from "../core/storycall.js";
 import { describe, expect, it } from "vitest";
 import { parseConfig } from "../core/config.js";
 import type { LlmProvider } from "../core/llm/provider.js";
 import { MAX_COMMENT_CHARS, renderComment } from "../core/render.js";
 import { produceReviewResult } from "../core/review.js";
 import {
-  MAX_STORY_EDGES, MAX_STORY_STEPS, sanitizeStoryText, storyMermaid, STORY_PROMPT, validateStory, type StoryFile,
+  MAX_STORY_EDGES, MAX_STORY_STEPS, sanitizeStoryText, storyMermaid, validateStory, type StoryFile,
 } from "../core/story.js";
 import { buildSystemPrompt, parseTriageOutput, runTriage, validateAgainstFiles } from "../core/triage.js";
 import type { PrFile } from "../core/types.js";
@@ -30,7 +31,7 @@ describe("validateStory", () => {
         { id: "s8", label: "one bad one good ref", refs: [{ path: "a.ts", line: 99 }, { path: "a.ts", line: 10 }] },
       ],
     }, files);
-    expect(s?.steps.map((x) => x.label)).toEqual(["ok one", "path only", "no line info", "one bad one good ref"]);
+    expect(s?.steps.map((x) => x.title)).toEqual(["ok one", "path only", "no line info", "one bad one good ref"]);
     expect(s?.steps[3]?.refs).toEqual([{ path: "a.ts", line: 10 }]);
   });
 
@@ -64,6 +65,16 @@ describe("validateStory", () => {
     expect(s.edges.length).toBeLessThanOrEqual(MAX_STORY_EDGES);
   });
 
+  it("caps titles/subtitles, derives refs, and maps positional edge ids after a dropped step", () => {
+    const s = validateStory({ title: "x".repeat(100), steps: [
+      { title: "dropped", refs: [] },
+      { title: "t".repeat(100), sub: "s".repeat(100), refs: [{ path: "a.ts", line: 1 }] },
+      { label: "Click handler", refs: [{ path: "b.ts", line: 5 }] },
+    ], edges: [{ from: "s2", to: "s3", change: "same" }] }, files)!;
+    expect(s.title).toHaveLength(40); expect(s.steps[0]!.title).toHaveLength(48); expect(s.steps[0]!.sub).toHaveLength(60);
+    expect(s.steps[1]!.title).toBe("Click handler"); expect(s.steps[1]!.sub).toBe("b.ts:5");
+    expect(s.edges[0]).toMatchObject({ from: "s1", to: "s2", change: "same" });
+  });
   it("returns null with fewer than two valid steps or garbage input", () => {
     expect(validateStory({ steps: [step("a", "only")] }, files)).toBeNull();
     expect(validateStory({ steps: [step("a", "ok"), { id: "b", label: "x", refs: [{ path: "nope" }] }] }, files)).toBeNull();
@@ -75,7 +86,7 @@ describe("validateStory", () => {
     const s = validateStory({
       steps: [step("a", "x", { change: "new", before: "b", after: "a" }), step("b", "y", { before: "old", after: "new" }), step("c", "z")],
     }, files)!;
-    expect(s.steps.map((x) => [x.change, x.before, x.after])).toEqual([["new", undefined, undefined], ["changed", "old", "new"], ["same", undefined, undefined]]);
+    expect(s.steps.map((x) => [x.change, x.before, x.after])).toEqual([["new", undefined, "a"], ["changed", "old", "new"], ["same", undefined, undefined]]);
   });
 });
 
@@ -95,7 +106,7 @@ describe("sanitizeStoryText", () => {
     for (const e of evil) {
       const out = sanitizeStoryText(e, 60);
       expect(out).toMatch(/^[\p{L}\p{N} .,:/_+\-=*'!?]*$/u);
-      for (const bad of ["click", "href", "javascript:", "<", ">", "-->", "---", ":::", "%%", "`", "@", "&", "\n", "://", "www."])
+      for (const bad of ["javascript:", "<", ">", "-->", "---", ":::", "%%", "`", "@", "&", "\n", "://", "www."])
         expect(out.toLowerCase()).not.toContain(bad);
     }
   });
@@ -110,7 +121,7 @@ describe("sanitizeStoryText", () => {
       steps: [step("a", evil[0]!, { before: evil[1]!, after: evil[2]! }), step("b", evil[3]!)],
     }, files)!;
     const m = storyMermaid(s);
-    expect(m).not.toMatch(/click|href|javascript|<script|%%|`/i);
+    expect(m).not.toMatch(/javascript|<script|%%|`/i);
     // a node line is exactly: id["text"] with one pair of quotes
     for (const l of m.split("\n").filter((x) => /^ {2}s\d\[/.test(x))) expect(l).toMatch(/^ {2}s\d\["[^"\]\[]*"\]$/);
   });
@@ -153,7 +164,7 @@ describe("storyMermaid", () => {
 const agg = { lane: "review" as const, files: [], labelReasons: [], summary: "s", rubric: [] };
 const open = (extra: object = {}) => renderComment({
   agg: { ...agg, rubric: [{ id: "cor.logic", verdict: "fail", severity: "high", justification: "bad", evidence: { path: "a.ts", line: 1 } }] } as never,
-  mode: "m", tokensEstimate: 0, notes: [], story, ...extra,
+  mode: "m", tokensEstimate: 0, notes: [], story, storyStyle: "mermaid", ...extra,
 });
 
 describe("sticky rendering", () => {
@@ -176,6 +187,11 @@ describe("sticky rendering", () => {
   it("renders nothing without a story", () => {
     expect(open({ story: null })).not.toContain("What this PR does");
     expect(open({ story: undefined })).not.toContain("mermaid");
+  });
+  it("drops the image before the list when over the cap", () => {
+    const md = open({ storyStyle: "svg", storyImageUrl: "https://example.com/" + "a".repeat(MAX_COMMENT_CHARS) });
+    expect(md).not.toContain("<img"); expect(md).toContain("Steps: 1. Parse request");
+    expect(md).not.toContain("shortened to fit");
   });
   it("drops the chart first when over the size cap", () => {
     const mkFindings = (len: number) => Array.from({ length: 100 }, (_, n) => ({ path: `f${n}.ts`, message: "x".repeat(len) }));
@@ -214,72 +230,57 @@ const review = (yml: string, provider: LlmProvider) => produceReviewResult({
   log: { info: () => {}, warning: () => {} },
 });
 
-describe("config and prompt", () => {
-  it("defaults to off, with animation on", () => {
-    const c = parseConfig("");
-    expect(c.comment).toEqual({ flow_chart: false, flow_chart_animate: true });
-    expect(parseConfig("comment:\n  flow_chart: true\n").comment).toEqual({ flow_chart: true, flow_chart_animate: true });
-    expect(parseConfig("comment:\n  flow_chart: true\n  flow_chart_animate: false\n").comment.flow_chart_animate).toBe(false);
+describe("config and separate call", () => {
+  it("defaults to SVG, text-only hosting, off, animation on", () => {
+    expect(parseConfig("").comment).toEqual({ flow_chart: false, flow_chart_animate: true, flow_chart_style: "svg", flow_chart_host: "none" });
+    expect(parseConfig("comment:\n  flow_chart_style: mermaid\n  flow_chart_host: branch").comment).toMatchObject({ flow_chart_style: "mermaid", flow_chart_host: "branch" });
+    expect(sanitizeStoryText("Click handler", 48)).toBe("Click handler");
   });
-
-  it("sends no story text when off and STORY_PROMPT when on", async () => {
+  it("leaves the full review request byte-identical and makes zero extra calls when off", async () => {
     const off: string[] = [], on: string[] = [];
-    await review("", mkProvider(off, reply({ story: storyJson })));
-    await review("comment:\n  flow_chart: true\n", mkProvider(on, reply({ story: storyJson })));
-    expect(off.length).toBeGreaterThan(0);
-    for (const p of off) { expect(p).not.toContain(STORY_PROMPT); expect(p).not.toContain('"story"'); }
-    expect(on.some((p) => p.includes(STORY_PROMPT))).toBe(true);
-    expect(buildSystemPrompt({})).not.toContain(STORY_PROMPT);
-    expect(buildSystemPrompt({ story: true })).toContain(STORY_PROMPT);
+    const provider = (seen: string[]): LlmProvider => ({ label: "fake", complete: async req => {
+      seen.push(JSON.stringify(req)); return req.system === STORY_SYSTEM_PROMPT ? JSON.stringify(storyJson) : reply();
+    } });
+    const a = await review("", provider(off));
+    const b = await review("comment:\n  flow_chart: true\n", provider(on));
+    expect(off).toHaveLength(1); expect(on).toHaveLength(2);
+    expect(on[0]).toBe(off[0]);
+    expect(JSON.parse(on[0]!).system).toBe(JSON.parse(off[0]!).system);
+    expect(buildSystemPrompt()).not.toContain(STORY_SYSTEM_PROMPT);
+    expect(b.body).toContain("Steps: 1. Read config; 2. Apply it");
+    expect(b.body).not.toContain("```mermaid");
+    expect(b.lane).toBe(a.lane); expect(b.findings).toEqual(a.findings);
   });
-
-  it("ignores a story the AI returns when the flag is off", async () => {
-    const r = await review("", mkProvider([], reply({ story: storyJson })));
-    expect(r.kind === "review" && r.body).not.toContain("What this PR does");
-    expect(r.kind === "review" && r.body).not.toContain("mermaid");
+  it("ignores review JSON story and isolates failed story calls", async () => {
+    const ignored = await review("", mkProvider([], reply({ story: storyJson })));
+    expect(ignored.body).not.toContain("Steps:");
+    const a = await review("", mkProvider([], reply()));
+    for (const failure of ["throw", "garbage", "truncate"]) {
+      const p: LlmProvider = { label: "fake", complete: async () => reply(), completeEx: async req => {
+        if (req.system !== STORY_SYSTEM_PROMPT) return { text: reply(), truncated: false };
+        if (failure === "throw") throw new Error("failure");
+        return { text: failure === "garbage" ? "not json" : JSON.stringify(storyJson), truncated: failure === "truncate" };
+      } };
+      const b = await review("comment:\n  flow_chart: true\n", p);
+      expect(b.agg).toEqual(a.agg); expect(b.findings).toEqual(a.findings); expect(b.body).toBe(a.body);
+    }
   });
-
-  it("draws the chart when on, without changing the lane", async () => {
-    const off = await review("", mkProvider([], reply()));
-    const r = await review("comment:\n  flow_chart: true\n", mkProvider([], reply({ story: storyJson })));
-    if (r.kind !== "review" || off.kind !== "review") throw new Error("kind");
-    expect(r.body).toContain("What this PR does");
-    expect(r.body).toContain("s1 e1@--> s2");
-    expect(r.lane).toBe(off.lane);
-    expect(r.findings).toEqual(off.findings);
-    const plain = await review("comment:\n  flow_chart: true\n  flow_chart_animate: false\n", mkProvider([], reply({ story: storyJson })));
-    expect(plain.kind === "review" && plain.body).toContain("s1 --> s2");
-  });
-
-  it("rules-only mode draws no chart", async () => {
-    const r = await produceReviewResult({
-      pr, cfg: parseConfig("provider:\n  type: none\ncomment:\n  flow_chart: true\n"), cfgRef: "main", files: [pf, pf2], provider: null,
-      readRepoFile: async () => null,
-      contextSource: { listPaths: async () => [], readFile: async () => null, searchSymbol: async () => [] },
-      log: { info: () => {}, warning: () => {} },
-    });
-    expect(r.kind === "review" && r.body).not.toContain("mermaid");
+  it("renders hosted images or text only, and supports explicit mermaid", () => {
+    const image = open({ storyStyle: "svg", storyImageUrl: "https://example.com/story.svg" });
+    expect(image).toContain('<img src="https://example.com/story.svg" alt="PR story:');
+    expect(image).toContain('width="440">');
+    const plain = open({ storyStyle: "svg" });
+    expect(plain).toContain("Steps: 1."); expect(plain).not.toContain("<img"); expect(plain).not.toContain("```mermaid");
+    expect(open({ storyStyle: "svg", storyImageUrl: 'https://bad/" onerror="x' })).not.toContain("<img");
   });
 });
 
-describe("story in the reply", () => {
-  const cfgOn = parseConfig("provider:\n  type: openai\n  model: m\ncomment:\n  flow_chart: true\n");
-  it("survives garbage without failing the review", async () => {
-    const garbage: unknown[] = ["a story", ["x"], 5, null, { steps: "x" }, { steps: Array.from({ length: 50_000 }, () => ({ label: "x".repeat(1000), refs: [{ path: "a.ts" }] })) }, { steps: [{ label: {}, refs: 3 }, null] }];
-    for (const g of garbage) {
-      const res = await runTriage(mkProvider([], reply({ story: g })), { title: "t", body: "", files: [pf] }, cfgOn, { story: true });
-      expect(res.llm?.summary).toBe("ok");
-      expect(res.llm?.files.get("a.ts")?.lane).toBe("review");
-      expect(res.error).toBeUndefined();
-    }
-  });
-  it("parseTriageOutput accepts any story value and validateAgainstFiles only keeps it when wanted", () => {
-    const out = parseTriageOutput(reply({ story: storyJson }));
-    expect(validateAgainstFiles(out, [pf, pf2]).story).toBeUndefined();
-    const on = validateAgainstFiles(out, [pf, pf2], [], undefined, true).story;
-    expect(on?.steps.map((s) => s.label)).toEqual(["Read config", "Apply it"]);
-    // line 9 is not in a.ts's diff, so that step drops and fewer than two remain
-    const bad = parseTriageOutput(reply({ story: { steps: [{ label: "x", refs: [{ path: "a.ts", line: 9 }] }, storyJson.steps[1]] } }));
-    expect(validateAgainstFiles(bad, [pf, pf2], [], undefined, true).story).toBeNull();
+describe("sanitizeStoryText cap", () => {
+  it("cuts long text at a word boundary and marks the cut", () => {
+    const out = sanitizeStoryText("very long title that should wrap nicely onto a second line", 30);
+    expect(out).toBe("very long title that should...");
+    expect(out.length).toBeLessThanOrEqual(30);
+    expect(sanitizeStoryText("short title", 30)).toBe("short title");
+    expect(sanitizeStoryText("x".repeat(40), 30)).toBe("x".repeat(27) + "...");
   });
 });

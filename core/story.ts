@@ -1,27 +1,25 @@
 /**
  * Optional "PR story" flow chart (`comment.flow_chart`). Pure: no I/O, no imports from outside core/.
- * The review call may return a small `story` (steps + edges) next to the lanes. Everything the model says is untrusted:
+ * A separate advisory call returns a small `story` (steps + edges). Everything the model says is untrusted:
  * `validateStory` keeps only steps that point at changed files, re-assigns every id, and reduces all text to a
- * conservative charset; `renderStory` turns the result into a mermaid flowchart. The story is advisory only: it never
+ * conservative charset; renderers consume only the validated story. The story is advisory only: it never
  * influences lanes, findings or checks.
  */
 
 export const MAX_STORY_STEPS = 6;
 export const MAX_STORY_EDGES = 8;
-export const MAX_LABEL_CHARS = 60;
+export const MAX_LABEL_CHARS = 48;
 export const MAX_BEFORE_AFTER_CHARS = 50;
 /** Raw entries looked at before the caps apply, so a huge reply costs nothing. */
 const RAW_STEP_LIMIT = 24;
 const RAW_EDGE_LIMIT = 48;
 
-/** Added to the review system prompt only when `comment.flow_chart` is on. */
-export const STORY_PROMPT = `Also add a top-level "story" to the JSON: what the PR does as at most 6 behavior steps in plain words (not imports): {"steps":[{"id":"s1","label":"<=60 chars","refs":[{"path":"<changed file>","line":<new-file line>}],"change":"new|changed|same","before":"<short, changed only>","after":"<short, changed only>"}],"edges":[{"from":"s1","to":"s2","change":"new|changed|same"}]}. Every step needs a ref to a changed file. Omit edges to chain the steps in order. It is advisory only.`;
-
 export type StoryChange = "new" | "changed" | "same";
 
 export interface StoryStep {
   id: string;
-  label: string;
+  title: string;
+  sub?: string;
   refs: { path: string; line?: number }[];
   change: StoryChange;
   before?: string;
@@ -36,6 +34,7 @@ export interface StoryEdge {
 }
 
 export interface Story {
+  title: string;
   steps: StoryStep[];
   edges: StoryEdge[];
 }
@@ -49,7 +48,7 @@ export interface StoryFile {
 /* ---------- sanitizer ---------- */
 
 /** Words that mermaid or markdown could act on; removed whole, case-insensitive. */
-const DANGEROUS = /javascript\s*:|vbscript\s*:|data\s*:|<\s*script|\b(?:click|href)\b|\bwww\.|-->|---|:::|%%|:\/\//gi;
+const DANGEROUS = /\bon\w+\s*=|javascript\s*:|vbscript\s*:|data\s*:|<\s*script|\bwww\.|-->|---|:::|%%|:\/\//gi;
 
 /**
  * Reduce untrusted text to one safe line: letters and digits of any script, space and `.,:/_+-=*'!?`. Everything else
@@ -64,7 +63,13 @@ export function sanitizeStoryText(raw: unknown, max: number): string {
     .replace(/([.,:/_+\-=*'!?])\1+/g, "$1")
     .replace(/\s+/g, " ")
     .trim();
-  return s.length > max ? s.slice(0, max).trim() : s;
+  const chars = Array.from(s);
+  if (chars.length <= max) return s;
+  // Over the cap: cut at a word boundary when one is close, and mark the cut.
+  let cut = chars.slice(0, Math.max(1, max - 3)).join("");
+  const sp = cut.lastIndexOf(" ");
+  if (chars[Math.max(1, max - 3)] !== " " && sp >= max / 2) cut = cut.slice(0, sp);
+  return cut.trim() + "...";
 }
 
 /* ---------- validator ---------- */
@@ -83,11 +88,11 @@ export function validateStory(raw: unknown, files: readonly StoryFile[]): Story 
 
   const steps: StoryStep[] = [];
   const idMap = new Map<string, string>(); // model id -> our id
-  for (const s of raw.steps.slice(0, RAW_STEP_LIMIT)) {
+  for (const [index, s] of raw.steps.slice(0, RAW_STEP_LIMIT).entries()) {
     if (steps.length >= MAX_STORY_STEPS) break;
     if (!isRec(s) || !Array.isArray(s.refs)) continue;
-    const label = sanitizeStoryText(s.label, MAX_LABEL_CHARS);
-    if (!label) continue;
+    const title = sanitizeStoryText(s.title, MAX_LABEL_CHARS) || sanitizeStoryText(s.label, MAX_LABEL_CHARS);
+    if (!title) continue;
     const refs: StoryStep["refs"] = [];
     for (const r of s.refs.slice(0, 8)) {
       if (!isRec(r) || typeof r.path !== "string") continue;
@@ -103,8 +108,8 @@ export function validateStory(raw: unknown, files: readonly StoryFile[]): Story 
     const after = sanitizeStoryText(s.after, MAX_BEFORE_AFTER_CHARS);
     const change = asChange(s.change) ?? (before || after ? "changed" : "same");
     const id = `s${steps.length + 1}`;
-    if (typeof s.id === "string" && !idMap.has(s.id)) idMap.set(s.id, id);
-    steps.push({ id, label, refs, change, ...(change === "changed" && before ? { before } : {}), ...(change === "changed" && after ? { after } : {}) });
+    if (!idMap.has(typeof s.id === "string" ? s.id : `s${index + 1}`)) idMap.set(typeof s.id === "string" ? s.id : `s${index + 1}`, id);
+    steps.push({ id, title, sub: sanitizeStoryText(s.sub, 60) || sanitizeStoryText(`${refs[0]!.path}${refs[0]!.line ? `:${refs[0]!.line}` : ""}`, 60), refs, change, ...(change === "changed" && before ? { before } : {}), ...(after ? { after } : {}) });
   }
   if (steps.length < 2) return null;
 
@@ -129,7 +134,7 @@ export function validateStory(raw: unknown, files: readonly StoryFile[]): Story 
   }
   // No edges, or none survived: chain the steps in order.
   if (!edges.length) for (let i = 0; i + 1 < steps.length; i++) add(steps[i]!, steps[i + 1]!, undefined);
-  return { steps, edges };
+  return { title: sanitizeStoryText(raw.title, 40) || "PR story", steps, edges };
 }
 
 /* ---------- renderer ---------- */
@@ -138,7 +143,7 @@ export function validateStory(raw: unknown, files: readonly StoryFile[]): Story 
 export function storyMermaid(story: Story, animate = true): string {
   const out = ["flowchart TD"];
   for (const s of story.steps) {
-    const label = [s.label, ...(s.before ? [`before: ${s.before}`] : []), ...(s.after ? [`after: ${s.after}`] : [])].join("<br/>");
+    const label = [s.title, ...(s.before ? [`before: ${s.before}`] : []), ...(s.after ? [`after: ${s.after}`] : [])].join("<br/>");
     out.push(`  ${s.id}["${label}"]`);
   }
   const moving = (c: StoryChange) => animate && c !== "same";
@@ -150,21 +155,14 @@ export function storyMermaid(story: Story, animate = true): string {
   return out.join("\n");
 }
 
-/**
- * The collapsed sticky section: the mermaid block plus a one-line plain-text fallback (the GitHub mobile app shows the raw
- * code). Everything in it comes from `sanitizeStoryText`, so it is safe inside markdown without further escaping.
- */
-export function renderStorySection(story: Story, animate = true): string[] {
+/** Collapsed chart plus sanitized plain-text fallback for mobile and unhosted SVGs. */
+export function renderStorySection(story: Story, animate = true, style: "svg" | "mermaid" = "svg", imageUrl?: string | null, chart = true): string[] {
+  const image = imageUrl && /^https:\/\/[^\s<>"']+$/.test(imageUrl) ? imageUrl.replace(/&/g, "&amp;") : null;
   return [
-    "<details><summary>What this PR does (AI-drawn, may be incomplete)</summary>",
-    "",
-    "```mermaid",
-    storyMermaid(story, animate),
-    "```",
-    "",
-    `Steps: ${story.steps.map((s, i) => `${i + 1}. ${s.label}`).join("; ")}`,
-    "",
-    "</details>",
-    "",
+    "<details><summary>What this PR does (AI-drawn, may be incomplete)</summary>", "",
+    ...(chart && style === "mermaid" ? ["```mermaid", storyMermaid(story, animate), "```", ""] :
+      chart && image ? [`<img src="${image}" alt="PR story: ${sanitizeStoryText(story.steps.map(s => s.title).join("; "), 350).replace(/'/g, "&#39;")}" width="440">`, ""] : []),
+    `Steps: ${story.steps.map((s, i) => `${i + 1}. ${s.title}${s.change === "changed" && s.before && s.after ? ` (${s.before} -> ${s.after})` : ""}`).join("; ")}`,
+    "", "</details>", "",
   ];
 }

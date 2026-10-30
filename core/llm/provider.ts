@@ -1,4 +1,7 @@
 export interface LlmRequest {
+  maxRetries?: number;
+  outputSchema?: Record<string, unknown>;
+  budgetMs?: number;
   system: string;
   user: string;
   maxOutputTokens: number;

@@ -313,7 +313,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
       context = g.pieces;
     }
     const prompt = { title: pr.title ?? "", body: pr.body ?? "", files: kept, context };
-    const tctx = { ...(shepherdOn ? { suggestions: (p: string) => !isProtectedPath(p, cfg) } : {}), policyText: policies.text, criteria, learnedText: cfg.learning.enabled ? (o.learnedLines ? renderLearnedSection(o.learnedLines, DELIM) : buildLearnedContext({ learned: o.learned, lessons: o.lessons, outcomeStats: o.outcomeStats }, DELIM)) : "", skippedDiffFiles: skipped, ref: o.ref ?? `#${pr.number}` };
+    const tctx = { ...(cfg.comment.flow_chart ? { story: true } : {}), ...(shepherdOn ? { suggestions: (p: string) => !isProtectedPath(p, cfg) } : {}), policyText: policies.text, criteria, learnedText: cfg.learning.enabled ? (o.learnedLines ? renderLearnedSection(o.learnedLines, DELIM) : buildLearnedContext({ learned: o.learned, lessons: o.lessons, outcomeStats: o.outcomeStats }, DELIM)) : "", skippedDiffFiles: skipped, ref: o.ref ?? `#${pr.number}` };
     let res = mode === "deep" && tools && canUseTools(provider)
       ? await runDeepTriage(provider, prompt, cfg, tctx, { tools }, log.info, log.warning)
       : await runTriage(provider, prompt, cfg, tctx, log.info, log.warning);
@@ -370,6 +370,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
     agg, mode: llm && provider ? provider.label : "rules-only", tokensEstimate: tokens, notes,
     policyFiles: policies.used, fileFindings: findings.filter((f) => f.line === undefined),
     breakdown: breakdown ?? undefined, approval: cfg.approval, laneMap: cfg.review.lane_map, prUrl: pr.html_url,
+    ...(cfg.comment.flow_chart && llm?.story ? { story: llm.story, storyAnimate: cfg.comment.flow_chart_animate } : {}),
     lineFindings: lineFindingsOf(findings),
   });
   return {

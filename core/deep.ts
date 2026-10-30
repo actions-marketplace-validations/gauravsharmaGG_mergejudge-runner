@@ -211,7 +211,7 @@ export async function runDeepTriage(
     }
     raw = final;
     try {
-      return result(validateAgainstFiles(parseTriageOutput(raw), input.files, ctx.criteria ?? [], ctx.suggestions));
+      return result(validateAgainstFiles(parseTriageOutput(raw), input.files, ctx.criteria ?? [], ctx.suggestions, ctx.story === true));
     } catch (e) {
       const info = classifyLlmFailure(e, provider.providerId);
       log(`LLM JSON attempt 1 failed: ${formatLlmFailure(info)}`);
@@ -223,7 +223,7 @@ export async function runDeepTriage(
       messages.push({ role: "assistant", content: raw });
       messages.push({ role: "user", content: retryInstruction(firstTruncated) });
       raw = (await turn(undefined, true, retryLimit)).text;
-      const llm = validateAgainstFiles(parseTriageOutput(raw), input.files, ctx.criteria ?? [], ctx.suggestions);
+      const llm = validateAgainstFiles(parseTriageOutput(raw), input.files, ctx.criteria ?? [], ctx.suggestions, ctx.story === true);
       warn(outputLimitWarning({ ref: ctx.ref, model: cfg.provider.model, limit, retryLimit, outputTokens: firstOut, truncated: firstTruncated, retry: "succeeded" }));
       return result(llm);
     }

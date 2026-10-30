@@ -172,6 +172,15 @@ export const configSchema = z.object({
       lane_map: z.boolean().default(false),
     })
     .default({ mode: "diff", lane_map: false }),
+  /** Sticky comment options. */
+  comment: z
+    .object({
+      /** Opt-in: the review call also returns a small "PR story" and the sticky shows it as a collapsed mermaid flow chart. Advisory; never changes lanes. */
+      flow_chart: z.boolean().default(false),
+      /** Animate edges on new or changed paths (mermaid v12). Only matters when flow_chart is on. */
+      flow_chart_animate: z.boolean().default(true),
+    })
+    .default({ flow_chart: false, flow_chart_animate: true }),
   /**
    * How many model passes run over the diff. `fast` (default) is the single pass.
    * `deep` adds a second pass for cross-hunk, concurrency, security, data and API defects.

@@ -54019,6 +54019,13 @@ var configSchema = external_exports.object({
     /** Opt-in test build: the sticky also shows a lane-choice map (raiser-first explanation + bucket counts + per-file lanes). Explanatory only. */
     lane_map: external_exports.boolean().default(false)
   }).default({ mode: "diff", lane_map: false }),
+  /** Sticky comment options. */
+  comment: external_exports.object({
+    /** Opt-in: the review call also returns a small "PR story" and the sticky shows it as a collapsed mermaid flow chart. Advisory; never changes lanes. */
+    flow_chart: external_exports.boolean().default(false),
+    /** Animate edges on new or changed paths (mermaid v12). Only matters when flow_chart is on. */
+    flow_chart_animate: external_exports.boolean().default(true)
+  }).default({ flow_chart: false, flow_chart_animate: true }),
   /**
    * How many model passes run over the diff. `fast` (default) is the single pass.
    * `deep` adds a second pass for cross-hunk, concurrency, security, data and API defects.
@@ -54804,6 +54811,104 @@ function renderLaneMap(agg, env, opts = {}) {
   return out;
 }
 
+// core/story.ts
+var MAX_STORY_STEPS = 6;
+var MAX_STORY_EDGES = 8;
+var MAX_LABEL_CHARS = 60;
+var MAX_BEFORE_AFTER_CHARS = 50;
+var RAW_STEP_LIMIT = 24;
+var RAW_EDGE_LIMIT = 48;
+var STORY_PROMPT = `Also add a top-level "story" to the JSON: what the PR does as at most 6 behavior steps in plain words (not imports): {"steps":[{"id":"s1","label":"<=60 chars","refs":[{"path":"<changed file>","line":<new-file line>}],"change":"new|changed|same","before":"<short, changed only>","after":"<short, changed only>"}],"edges":[{"from":"s1","to":"s2","change":"new|changed|same"}]}. Every step needs a ref to a changed file. Omit edges to chain the steps in order. It is advisory only.`;
+var DANGEROUS = /javascript\s*:|vbscript\s*:|data\s*:|<\s*script|\b(?:click|href)\b|\bwww\.|-->|---|:::|%%|:\/\//gi;
+function sanitizeStoryText(raw, max) {
+  if (typeof raw !== "string") return "";
+  const s = raw.slice(0, 400).replace(DANGEROUS, " ").replace(/[^\p{L}\p{N} .,:/_+\-=*'!?]/gu, " ").replace(/([.,:/_+\-=*'!?])\1+/g, "$1").replace(/\s+/g, " ").trim();
+  return s.length > max ? s.slice(0, max).trim() : s;
+}
+var CHANGES = /* @__PURE__ */ new Set(["new", "changed", "same"]);
+var asChange = (v) => typeof v === "string" && CHANGES.has(v) ? v : void 0;
+var isRec = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+function validateStory(raw, files) {
+  if (!isRec(raw) || !Array.isArray(raw.steps)) return null;
+  const byPath = new Map(files.map((f) => [f.path, f]));
+  const steps = [];
+  const idMap = /* @__PURE__ */ new Map();
+  for (const s of raw.steps.slice(0, RAW_STEP_LIMIT)) {
+    if (steps.length >= MAX_STORY_STEPS) break;
+    if (!isRec(s) || !Array.isArray(s.refs)) continue;
+    const label = sanitizeStoryText(s.label, MAX_LABEL_CHARS);
+    if (!label) continue;
+    const refs = [];
+    for (const r of s.refs.slice(0, 8)) {
+      if (!isRec(r) || typeof r.path !== "string") continue;
+      const f = byPath.get(r.path);
+      if (!f) continue;
+      if (r.line === void 0 || r.line === null) {
+        refs.push({ path: f.path });
+        continue;
+      }
+      if (typeof r.line !== "number" || !Number.isInteger(r.line) || r.line < 1) continue;
+      if (f.lines && !f.lines.has(r.line)) continue;
+      refs.push({ path: f.path, line: r.line });
+    }
+    if (!refs.length) continue;
+    const before = sanitizeStoryText(s.before, MAX_BEFORE_AFTER_CHARS);
+    const after = sanitizeStoryText(s.after, MAX_BEFORE_AFTER_CHARS);
+    const change = asChange(s.change) ?? (before || after ? "changed" : "same");
+    const id = `s${steps.length + 1}`;
+    if (typeof s.id === "string" && !idMap.has(s.id)) idMap.set(s.id, id);
+    steps.push({ id, label, refs, change, ...change === "changed" && before ? { before } : {}, ...change === "changed" && after ? { after } : {} });
+  }
+  if (steps.length < 2) return null;
+  const byId = new Map(steps.map((s) => [s.id, s]));
+  const derive = (a, b) => a.change === "new" || b.change === "new" ? "new" : a.change === "changed" || b.change === "changed" ? "changed" : "same";
+  const edges = [];
+  const seen = /* @__PURE__ */ new Set();
+  const add = (from, to, change) => {
+    const key = `${from.id}>${to.id}`;
+    if (from === to || seen.has(key) || edges.length >= MAX_STORY_EDGES) return;
+    seen.add(key);
+    edges.push({ id: `e${edges.length + 1}`, from: from.id, to: to.id, change: change ?? derive(from, to) });
+  };
+  if (Array.isArray(raw.edges)) {
+    for (const e of raw.edges.slice(0, RAW_EDGE_LIMIT)) {
+      if (!isRec(e) || typeof e.from !== "string" || typeof e.to !== "string") continue;
+      const a = byId.get(idMap.get(e.from) ?? ""), b = byId.get(idMap.get(e.to) ?? "");
+      if (a && b) add(a, b, asChange(e.change));
+    }
+  }
+  if (!edges.length) for (let i = 0; i + 1 < steps.length; i++) add(steps[i], steps[i + 1], void 0);
+  return { steps, edges };
+}
+function storyMermaid(story, animate = true) {
+  const out = ["flowchart TD"];
+  for (const s of story.steps) {
+    const label = [s.label, ...s.before ? [`before: ${s.before}`] : [], ...s.after ? [`after: ${s.after}`] : []].join("<br/>");
+    out.push(`  ${s.id}["${label}"]`);
+  }
+  const moving = (c) => animate && c !== "same";
+  for (const e of story.edges) out.push(moving(e.change) ? `  ${e.from} ${e.id}@--> ${e.to}` : `  ${e.from} --> ${e.to}`);
+  for (const e of story.edges) if (moving(e.change)) out.push(`  ${e.id}@{ animate: true }`);
+  const ids = (c) => story.steps.filter((s) => s.change === c).map((s) => s.id).join(",");
+  if (ids("new")) out.push("  classDef added stroke-width:3px", `  class ${ids("new")} added`);
+  if (ids("changed")) out.push("  classDef changed stroke-width:2px", `  class ${ids("changed")} changed`);
+  return out.join("\n");
+}
+function renderStorySection(story, animate = true) {
+  return [
+    "<details><summary>What this PR does (AI-drawn, may be incomplete)</summary>",
+    "",
+    "```mermaid",
+    storyMermaid(story, animate),
+    "```",
+    "",
+    `Steps: ${story.steps.map((s, i) => `${i + 1}. ${s.label}`).join("; ")}`,
+    "",
+    "</details>",
+    ""
+  ];
+}
+
 // core/render.ts
 var MARKER = "<!-- mergejudge:summary -->";
 var EMOJI = { auto: "\u{1F7E2}", review: "\u{1F7E1}", block: "\u{1F534}" };
@@ -55061,8 +55166,10 @@ function renderComment(r) {
   const out = [MARKER, "## \u2696\uFE0F MergeJudge", ""];
   out.push(...outcomeLines(agg, flagged.length, problems, r.lineFindings?.length ?? 0));
   out.push(escapeMd(agg.summary), "");
-  out.push(...whatToCheck(r, rubricOpen), ...whyThisLane(r, flagged), ...filesSection(r, flagged, safe), ...allChecks(rubric));
-  const head = out.join("\n");
+  const checks = whatToCheck(r, rubricOpen);
+  const rest = [...whyThisLane(r, flagged), ...filesSection(r, flagged, safe), ...allChecks(rubric)];
+  const chart = r.story ? renderStorySection(r.story, r.storyAnimate !== false) : [];
+  const headOf = (withChart2) => [...out, ...checks, ...withChart2 ? chart : [], ...rest].join("\n");
   const unchecked = notChecked(r);
   const tail = [...unchecked ? [unchecked] : [], "---", "", renderFeedback(rubric), ""];
   tail.push(
@@ -55074,7 +55181,9 @@ function renderComment(r) {
     "",
     "</details>"
   );
-  return capBody(head, "\n" + tail.join("\n"));
+  const tailText = "\n" + tail.join("\n");
+  const withChart = headOf(chart.length > 0);
+  return capBody(chart.length && withChart.length + tailText.length > MAX_COMMENT_CHARS ? headOf(false) : withChart, tailText);
 }
 var CHECK_NAME = "mergejudge/lane";
 var CHECK_CONCLUSION = {
@@ -57611,6 +57720,7 @@ ${body}
   }
   if (ctx.learnedText?.trim()) parts.push(ctx.learnedText.trim());
   if (ctx.suggestions) parts.push(SUGGESTION_RULES);
+  if (ctx.story) parts.push(STORY_PROMPT);
   if (ctx.criteria?.length) {
     parts.push(
       `Also score this rubric. Add a top-level "rubric" array to the JSON: [{"id": "<criterion id>", "result": "pass" | "fail" | "n/a" | <1-5 for scored criteria>, "justification": "<one sentence>", "evidence": {"path": "<file>", "line": <new-file line>, "quote": "<exact text copied from the diff>"}}]. Evidence with an exact quote is REQUIRED for "fail" and for scores of 1-2; without it the result is ignored. Use "n/a" when the criterion does not apply. Criteria:
@@ -57704,7 +57814,9 @@ var triageOutputSchema = external_exports.object({
     reason: external_exports.string().default(""),
     findings: external_exports.array(external_exports.object({ line: external_exports.coerce.number().int(), quote: external_exports.string().optional(), message: external_exports.string(), suggestion: external_exports.string().optional() })).max(50).default([])
   })),
-  rubric: rubricOutputSchema
+  rubric: rubricOutputSchema,
+  /** Opaque here: validated by validateStory only when the story is wanted, so a bad story can never fail the review. */
+  story: external_exports.unknown().optional()
 });
 function parseTriageOutput(raw) {
   let t = raw.trim();
@@ -57798,7 +57910,7 @@ function keepSuggestion(raw, current) {
   return s.trimEnd() === current.replace(/\r$/, "").trimEnd() ? void 0 : s;
 }
 var MAX_FINDINGS = 20;
-function validateAgainstFiles(out, files, criteria = [], suggestions) {
+function validateAgainstFiles(out, files, criteria = [], suggestions, wantStory = false) {
   const known = new Set(files.map((f) => f.path));
   const map2 = /* @__PURE__ */ new Map();
   for (const f of out.files) {
@@ -57827,11 +57939,20 @@ function validateAgainstFiles(out, files, criteria = [], suggestions) {
       findings.push({ path: f.path, ...line !== void 0 ? { line, quote } : {}, message, ...suggestion !== void 0 ? { suggestion } : {} });
     }
   }
+  let story = null;
+  if (wantStory) {
+    try {
+      story = validateStory(out.story, files.map((f) => ({ path: f.path, lines: f.patch ? diffLines(f.patch) : null })));
+    } catch {
+      story = null;
+    }
+  }
   return {
     summary: out.summary.slice(0, 600),
     files: map2,
     findings: findings.slice(0, MAX_FINDINGS),
-    rubric: evaluateRubric(out.rubric, criteria, files)
+    rubric: evaluateRubric(out.rubric, criteria, files),
+    ...wantStory ? { story } : {}
   };
 }
 function tokenBreakdown(opts) {
@@ -57898,7 +58019,7 @@ ${retryInstruction(firstTruncated)}` : prompt,
         }
         let llm;
         try {
-          llm = validateAgainstFiles(parseTriageOutput(raw), input2.files, ctx.criteria ?? [], ctx.suggestions);
+          llm = validateAgainstFiles(parseTriageOutput(raw), input2.files, ctx.criteria ?? [], ctx.suggestions, ctx.story === true);
         } catch (pe) {
           if (!r.truncated) throw pe;
           throw new LlmError("parse", { provider: provider.providerId });
@@ -58103,7 +58224,7 @@ ${deepRules(cfg, opts.tools)}`;
     }
     raw = final;
     try {
-      return result(validateAgainstFiles(parseTriageOutput(raw), input2.files, ctx.criteria ?? [], ctx.suggestions));
+      return result(validateAgainstFiles(parseTriageOutput(raw), input2.files, ctx.criteria ?? [], ctx.suggestions, ctx.story === true));
     } catch (e) {
       const info2 = classifyLlmFailure(e, provider.providerId);
       log(`LLM JSON attempt 1 failed: ${formatLlmFailure(info2)}`);
@@ -58115,7 +58236,7 @@ ${deepRules(cfg, opts.tools)}`;
       messages.push({ role: "assistant", content: raw });
       messages.push({ role: "user", content: retryInstruction(firstTruncated) });
       raw = (await turn(void 0, true, retryLimit)).text;
-      const llm = validateAgainstFiles(parseTriageOutput(raw), input2.files, ctx.criteria ?? [], ctx.suggestions);
+      const llm = validateAgainstFiles(parseTriageOutput(raw), input2.files, ctx.criteria ?? [], ctx.suggestions, ctx.story === true);
       warn2(outputLimitWarning({ ref: ctx.ref, model: cfg.provider.model, limit, retryLimit, outputTokens: firstOut, truncated: firstTruncated, retry: "succeeded" }));
       return result(llm);
     }
@@ -59540,7 +59661,7 @@ async function produceReviewResult(o) {
       context3 = g2.pieces;
     }
     const prompt = { title: pr.title ?? "", body: pr.body ?? "", files: kept, context: context3 };
-    const tctx = { ...shepherdOn ? { suggestions: (p) => !isProtectedPath(p, cfg) } : {}, policyText: policies.text, criteria, learnedText: cfg.learning.enabled ? o.learnedLines ? renderLearnedSection(o.learnedLines, DELIM) : buildLearnedContext({ learned: o.learned, lessons: o.lessons, outcomeStats: o.outcomeStats }, DELIM) : "", skippedDiffFiles: skipped, ref: o.ref ?? `#${pr.number}` };
+    const tctx = { ...cfg.comment.flow_chart ? { story: true } : {}, ...shepherdOn ? { suggestions: (p) => !isProtectedPath(p, cfg) } : {}, policyText: policies.text, criteria, learnedText: cfg.learning.enabled ? o.learnedLines ? renderLearnedSection(o.learnedLines, DELIM) : buildLearnedContext({ learned: o.learned, lessons: o.lessons, outcomeStats: o.outcomeStats }, DELIM) : "", skippedDiffFiles: skipped, ref: o.ref ?? `#${pr.number}` };
     let res = mode === "deep" && tools && canUseTools(provider) ? await runDeepTriage(provider, prompt, cfg, tctx, { tools }, log.info, log.warning) : await runTriage(provider, prompt, cfg, tctx, log.info, log.warning);
     if (res.deep?.stopped) notes.push(`AI tool budget exhausted (${res.deep.stopped}); further exploration was not checked.`);
     if (res.llm && aiModeOf(cfg) === "deep") {
@@ -59596,6 +59717,7 @@ async function produceReviewResult(o) {
     approval: cfg.approval,
     laneMap: cfg.review.lane_map,
     prUrl: pr.html_url,
+    ...cfg.comment.flow_chart && llm?.story ? { story: llm.story, storyAnimate: cfg.comment.flow_chart_animate } : {},
     lineFindings: lineFindingsOf(findings)
   });
   return {

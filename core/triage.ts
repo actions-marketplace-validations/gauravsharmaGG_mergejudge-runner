@@ -6,6 +6,7 @@ import { completeWithMeta, type LlmProvider } from "./llm/provider.js";
 import type { ContextPiece } from "./context.js";
 import type { Lane, PrFile } from "./types.js";
 import { classifyFiles } from "./rules.js";
+import { STORY_PROMPT, validateStory, type Story } from "./story.js";
 import { criteriaPrompt, evaluateRubric, quoteInPatch, rubricOutputSchema, type Criterion, type RubricResult } from "./rubrics.js";
 
 export const DELIM = "untrusted_pr_data";
@@ -48,6 +49,8 @@ export interface PromptContext {
    * only when this returns true for the finding's path (not protected). Unset (the default) leaves prompt and findings unchanged.
    */
   suggestions?: (path: string) => boolean;
+  /** `comment.flow_chart`: the prompt also asks for a `story` (STORY_PROMPT) and the reply's story is validated and kept. Unset: no extra prompt text. */
+  story?: boolean;
 }
 
 export const SUGGESTION_RULES = `Suggested changes: for a finding that has a "line" and a "quote", you may add an optional "suggestion" field to that finding: the exact replacement text for that one line (the line the quote is on), only when you are sure of a small, safe, local fix. It replaces just that single line; it may contain newlines if one line becomes several. Omit "suggestion" whenever the fix is not that simple. Never put code fences in it.`;
@@ -65,6 +68,7 @@ export function buildSystemPrompt(ctx: PromptContext = {}): string {
   }
   if (ctx.learnedText?.trim()) parts.push(ctx.learnedText.trim());
   if (ctx.suggestions) parts.push(SUGGESTION_RULES);
+  if (ctx.story) parts.push(STORY_PROMPT);
   if (ctx.criteria?.length) {
     parts.push(
       `Also score this rubric. Add a top-level "rubric" array to the JSON: [{"id": "<criterion id>", "result": "pass" | "fail" | "n/a" | <1-5 for scored criteria>, "justification": "<one sentence>", "evidence": {"path": "<file>", "line": <new-file line>, "quote": "<exact text copied from the diff>"}}]. Evidence with an exact quote is REQUIRED for "fail" and for scores of 1-2; without it the result is ignored. Use "n/a" when the criterion does not apply. Criteria:\n${criteriaPrompt(ctx.criteria)}`,
@@ -186,6 +190,8 @@ export const triageOutputSchema = z.object({
     findings: z.array(z.object({ line: z.coerce.number().int(), quote: z.string().optional(), message: z.string(), suggestion: z.string().optional() })).max(50).default([]),
   })),
   rubric: rubricOutputSchema,
+  /** Opaque here: validated by validateStory only when the story is wanted, so a bad story can never fail the review. */
+  story: z.unknown().optional(),
 });
 export type TriageOutput = z.infer<typeof triageOutputSchema>;
 
@@ -258,6 +264,8 @@ export interface LlmTriage {
   files: Map<string, { lane: Lane; reason: string }>;
   findings: Finding[];
   rubric: RubricResult[];
+  /** Validated PR story (comment.flow_chart on only). Advisory: never read by aggregate. */
+  story?: Story | null;
 }
 
 export interface Finding {
@@ -295,7 +303,7 @@ export function keepSuggestion(raw: string | undefined, current: string | undefi
 
 export const MAX_FINDINGS = 20;
 
-export function validateAgainstFiles(out: TriageOutput, files: PrFile[], criteria: Criterion[] = [], suggestions?: (path: string) => boolean): LlmTriage {
+export function validateAgainstFiles(out: TriageOutput, files: PrFile[], criteria: Criterion[] = [], suggestions?: (path: string) => boolean, wantStory = false): LlmTriage {
   const known = new Set(files.map((f) => f.path));
   const map = new Map<string, { lane: Lane; reason: string }>();
   for (const f of out.files) {
@@ -326,8 +334,12 @@ export function validateAgainstFiles(out: TriageOutput, files: PrFile[], criteri
       findings.push({ path: f.path, ...(line !== undefined ? { line, quote } : {}), message, ...(suggestion !== undefined ? { suggestion } : {}) });
     }
   }
+  let story: Story | null = null;
+  if (wantStory) {
+    try { story = validateStory(out.story, files.map((f) => ({ path: f.path, lines: f.patch ? diffLines(f.patch) : null }))); } catch { story = null; }
+  }
   return { summary: out.summary.slice(0, 600), files: map, findings: findings.slice(0, MAX_FINDINGS),
-    rubric: evaluateRubric(out.rubric, criteria, files) };
+    rubric: evaluateRubric(out.rubric, criteria, files), ...(wantStory ? { story } : {}) };
 }
 
 export interface TriageResult {
@@ -414,7 +426,7 @@ export async function runTriage(
         if (!repair) { firstTruncated = r.truncated; firstOut = r.outputTokens ?? estimateTokens(raw); }
         let llm: LlmTriage;
         try {
-          llm = validateAgainstFiles(parseTriageOutput(raw), input.files, ctx.criteria ?? [], ctx.suggestions);
+          llm = validateAgainstFiles(parseTriageOutput(raw), input.files, ctx.criteria ?? [], ctx.suggestions, ctx.story === true);
         } catch (pe) {
           if (!r.truncated) throw pe;
           throw new LlmError("parse", { provider: provider.providerId });

@@ -218,6 +218,8 @@ No config file is required. Built-in defaults apply, and the file is read from t
 | `review.mode` | How much surrounding code is attached: `diff` (default), `context`, or `deep` (callers, imports, related files). This is not the pass count. |
 | `review.security` | Optional boolean. `true` adds the `sec.audit.*` pack. Off unless set on the base branch. Action only. |
 | `review.lane_map` | Optional boolean. Adds the lane choice map to the summary. The lane and `mergejudge/lane` check do not change. |
+| `comment.flow_chart` | Optional boolean, default `false`. When `true`, the review call also asks the model for a small "PR story" (at most 6 steps) and the sticky comment gains a collapsed "What this PR does" mermaid flow chart after "What to check", with a plain-text step list under it. Steps must point at changed files; anything else is dropped, and text is reduced to a safe charset. Costs about 150 extra prompt tokens; with `false` nothing is added to the prompt and nothing is drawn. Advisory only: it never changes the lane, findings or checks. No chart in rules-only mode. |
+| `comment.flow_chart_animate` | Optional boolean, default `true`. Only matters with `comment.flow_chart`. Animates the edges of new or changed paths (mermaid v12 edge ids, rendered by GitHub web); `false` draws plain arrows. |
 | `lanes.protected` | Globs that are at least `review`. Defaults include `.github/**`, `deploy/**`, `**/auth/**`, `**/migrations/**`. |
 | `lanes.auto` | Docs and style globs that can be `auto` under the line limit. Low risk, not a guarantee. |
 | `lanes.code_auto` | Opt-in. Off by default. Small test-only changes can be `auto`. Read from the base branch. |

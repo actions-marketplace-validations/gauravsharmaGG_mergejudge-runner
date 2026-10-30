@@ -4,7 +4,7 @@ import { DEFAULT_PROTECTED, type Config } from "./config.js";
 import type { Octokit, Repo } from "./github.js";
 import { escapeMd } from "./render.js";
 import { isMergeJudgeConfigPath } from "./rules.js";
-import { redact } from "../src/redact.js";
+import { redact } from "./redact.js";
 import { effectiveCap } from "./shepherdrules.js";
 
 /** Label that turns Shepherd on for a PR (adding) or off (removing). */

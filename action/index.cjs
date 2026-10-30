@@ -54823,7 +54823,7 @@ var RAW_EDGE_LIMIT = 48;
 var DANGEROUS = /\bon\w+\s*=|javascript\s*:|vbscript\s*:|data\s*:|<\s*script|\bwww\.|-->|---|:::|%%|:\/\//gi;
 function sanitizeStoryText(raw, max) {
   if (typeof raw !== "string") return "";
-  const s = raw.slice(0, 400).replace(DANGEROUS, " ").replace(/[^\p{L}\p{N} .,:/_+\-=*'!?]/gu, " ").replace(/([.,:/_+\-=*'!?])\1+/g, "$1").replace(/\s+/g, " ").trim();
+  const s = raw.slice(0, 400).replace(DANGEROUS, " ").replace(/[^\p{L}\p{N} .,:;/_+\-=*'"!?()[\]{}]/gu, " ").replace(/([.,:;/_+\-=*'"!?])\1+/g, "$1").replace(/\s+/g, " ").trim();
   const chars = Array.from(s);
   if (chars.length <= max) return s;
   let cut = chars.slice(0, Math.max(1, max - 3)).join("");
@@ -54886,10 +54886,13 @@ function validateStory(raw, files) {
   if (!edges.length) for (let i = 0; i + 1 < steps.length; i++) add(steps[i], steps[i + 1], void 0);
   return { title: sanitizeStoryText(raw.title, 40) || "PR story", steps, edges };
 }
+var mdText = (t) => t.replace(/[\\`*_{}\[\]()<>#+!|~]/g, "\\$&").replace(/&/g, "&amp;");
+var attr = (t) => t.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/'/g, "&#39;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+var mermaidText = (t) => t.replace(/["\[\]{}();]/g, " ").replace(/\s+/g, " ").trim();
 function storyMermaid(story, animate = true) {
   const out = ["flowchart TD"];
   for (const s of story.steps) {
-    const label = [s.title, ...s.before ? [`before: ${s.before}`] : [], ...s.after ? [`after: ${s.after}`] : []].join("<br/>");
+    const label = [s.title, ...s.before ? [`before: ${s.before}`] : [], ...s.after ? [`after: ${s.after}`] : []].map(mermaidText).join("<br/>");
     out.push(`  ${s.id}["${label}"]`);
   }
   const moving = (c) => animate && c !== "same";
@@ -54903,10 +54906,10 @@ function storyMermaid(story, animate = true) {
 function renderStorySection(story, animate = true, style = "svg", imageUrl, chart = true) {
   const image = imageUrl && /^https:\/\/[^\s<>"']+$/.test(imageUrl) ? imageUrl.replace(/&/g, "&amp;") : null;
   return [
-    "<details><summary>What this PR does (AI-drawn, may be incomplete)</summary>",
+    "<details open><summary>What this PR does (AI-drawn, may be incomplete)</summary>",
     "",
-    ...chart && style === "mermaid" ? ["```mermaid", storyMermaid(story, animate), "```", ""] : chart && image ? [`<img src="${image}" alt="PR story: ${sanitizeStoryText(story.steps.map((s) => s.title).join(". "), 350).replace(/'/g, "&#39;")}" width="440">`, ""] : [],
-    `Steps: ${story.steps.map((s, i) => `${i + 1}. ${s.title}${s.change === "changed" && s.before && s.after ? ` (${s.before} -> ${s.after})` : ""}`).join("; ")}`,
+    ...chart && style === "mermaid" ? ["```mermaid", storyMermaid(story, animate), "```", ""] : chart && image ? [`<img src="${image}" alt="PR story: ${attr(sanitizeStoryText(story.steps.map((s) => s.title).join(". "), 350))}" width="440">`, ""] : [],
+    `Steps: ${story.steps.map((s, i) => `${i + 1}. ${mdText(s.title)}${s.change === "changed" && s.before && s.after ? ` (${mdText(s.before)} -> ${mdText(s.after)})` : ""}`).join("; ")}`,
     "",
     "</details>",
     ""

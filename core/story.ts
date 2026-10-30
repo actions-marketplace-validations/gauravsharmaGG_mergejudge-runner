@@ -51,16 +51,18 @@ export interface StoryFile {
 const DANGEROUS = /\bon\w+\s*=|javascript\s*:|vbscript\s*:|data\s*:|<\s*script|\bwww\.|-->|---|:::|%%|:\/\//gi;
 
 /**
- * Reduce untrusted text to one safe line: letters and digits of any script, space and `.,:/_+-=*'!?`. Everything else
- * (control chars, quotes, brackets, pipes, `<>`, `#`, `;`, `%`, `@`, `&`, backticks) is dropped, so no mermaid or markdown
- * syntax can be built from it. Runs of punctuation are collapsed and the result is capped at `max` characters.
+ * Reduce untrusted text to one line: letters and digits of any script, space and `.,:;/_+-=*'"!?()[]{}`. Everything
+ * else (control chars, pipes, `<>`, `#`, `%`, `@`, `&`, backticks, backslashes) is dropped, and the DANGEROUS words go.
+ * The kept punctuation is not safe by itself: every output escapes it for its context (`esc` in storysvg.ts for SVG,
+ * `mdText` for the markdown step list, `attr` for the alt text, `mermaidText` for the opt-in mermaid label).
+ * Runs of punctuation are collapsed and the result is capped at `max` characters.
  */
 export function sanitizeStoryText(raw: unknown, max: number): string {
   if (typeof raw !== "string") return "";
   const s = raw.slice(0, 400)
     .replace(DANGEROUS, " ")
-    .replace(/[^\p{L}\p{N} .,:/_+\-=*'!?]/gu, " ")
-    .replace(/([.,:/_+\-=*'!?])\1+/g, "$1")
+    .replace(/[^\p{L}\p{N} .,:;/_+\-=*'"!?()[\]{}]/gu, " ")
+    .replace(/([.,:;/_+\-=*'"!?])\1+/g, "$1")
     .replace(/\s+/g, " ")
     .trim();
   const chars = Array.from(s);
@@ -137,13 +139,22 @@ export function validateStory(raw: unknown, files: readonly StoryFile[]): Story 
   return { title: sanitizeStoryText(raw.title, 40) || "PR story", steps, edges };
 }
 
+/* ---------- output escaping ---------- */
+
+/** Markdown inline text: backslash-escape everything markdown could act on (the sanitizer already dropped `<>&|#~\``). */
+export const mdText = (t: string) => t.replace(/[\\`*_{}\[\]()<>#+!|~]/g, "\\$&").replace(/&/g, "&amp;");
+/** A double-quoted HTML attribute value. */
+export const attr = (t: string) => t.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/'/g, "&#39;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+/** A quoted mermaid label: mermaid has no reliable escape for quotes and brackets, so they become spaces. */
+export const mermaidText = (t: string) => t.replace(/["\[\]{}();]/g, " ").replace(/\s+/g, " ").trim();
+
 /* ---------- renderer ---------- */
 
 /** mermaid flowchart source for a validated story. With `animate` off no edge ids and no `@` appear at all. */
 export function storyMermaid(story: Story, animate = true): string {
   const out = ["flowchart TD"];
   for (const s of story.steps) {
-    const label = [s.title, ...(s.before ? [`before: ${s.before}`] : []), ...(s.after ? [`after: ${s.after}`] : [])].join("<br/>");
+    const label = [s.title, ...(s.before ? [`before: ${s.before}`] : []), ...(s.after ? [`after: ${s.after}`] : [])].map(mermaidText).join("<br/>");
     out.push(`  ${s.id}["${label}"]`);
   }
   const moving = (c: StoryChange) => animate && c !== "same";
@@ -155,14 +166,14 @@ export function storyMermaid(story: Story, animate = true): string {
   return out.join("\n");
 }
 
-/** Collapsed chart plus sanitized plain-text fallback for mobile and unhosted SVGs. */
+/** Open chart plus escaped plain-text fallback for mobile and unhosted SVGs. */
 export function renderStorySection(story: Story, animate = true, style: "svg" | "mermaid" = "svg", imageUrl?: string | null, chart = true): string[] {
   const image = imageUrl && /^https:\/\/[^\s<>"']+$/.test(imageUrl) ? imageUrl.replace(/&/g, "&amp;") : null;
   return [
-    "<details><summary>What this PR does (AI-drawn, may be incomplete)</summary>", "",
+    "<details open><summary>What this PR does (AI-drawn, may be incomplete)</summary>", "",
     ...(chart && style === "mermaid" ? ["```mermaid", storyMermaid(story, animate), "```", ""] :
-      chart && image ? [`<img src="${image}" alt="PR story: ${sanitizeStoryText(story.steps.map(s => s.title).join(". "), 350).replace(/'/g, "&#39;")}" width="440">`, ""] : []),
-    `Steps: ${story.steps.map((s, i) => `${i + 1}. ${s.title}${s.change === "changed" && s.before && s.after ? ` (${s.before} -> ${s.after})` : ""}`).join("; ")}`,
+      chart && image ? [`<img src="${image}" alt="PR story: ${attr(sanitizeStoryText(story.steps.map(s => s.title).join(". "), 350))}" width="440">`, ""] : []),
+    `Steps: ${story.steps.map((s, i) => `${i + 1}. ${mdText(s.title)}${s.change === "changed" && s.before && s.after ? ` (${mdText(s.before)} -> ${mdText(s.after)})` : ""}`).join("; ")}`,
     "", "</details>", "",
   ];
 }

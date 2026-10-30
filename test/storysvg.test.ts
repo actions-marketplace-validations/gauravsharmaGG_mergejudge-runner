@@ -71,4 +71,15 @@ describe("subway SVG", () => {
     expect(head(long).endsWith("\u2026")).toBe(true);
     expect(long).not.toContain("3 steps");
   });
+  it("draws brackets, semicolons and quotes as escaped text", () => {
+    const s = validateStory({ title: 'Check "sum"; [x]', steps: [
+      { title: "Test checks [1, 2, NaN, Infinity, 3] gives 4", change: "new", refs: [{ path: "a.ts", line: 1 }] },
+      { title: `say "hi"; it's (ok) {y}`, change: "same", refs: [{ path: "a.ts", line: 2 }] },
+    ] }, [{ path: "a.ts", lines: new Set([1, 2]) }])!;
+    const svg = renderStorySvg(s, { width: 440 });
+    expect(svg).toContain(">Test checks [1, 2, NaN, Infinity, 3] gives 4<");
+    expect(svg).toContain(">say &quot;hi&quot;; it&#39;s (ok) {y}<");
+    expect(svg).toContain('aria-label="Check &quot;sum&quot;; [x]"');
+    expect(svg.replace(/<style>[\s\S]*?<\/style>/, "").match(/<text[^>]*>[^<]*"/)).toBeNull();
+  });
 });

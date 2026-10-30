@@ -105,7 +105,7 @@ describe("sanitizeStoryText", () => {
   it("emits only the allowlisted charset and none of the mermaid or markdown triggers", () => {
     for (const e of evil) {
       const out = sanitizeStoryText(e, 60);
-      expect(out).toMatch(/^[\p{L}\p{N} .,:/_+\-=*'!?]*$/u);
+      expect(out).toMatch(/^[\p{L}\p{N} .,:;/_+\-=*'"!?()[\]{}]*$/u);
       for (const bad of ["javascript:", "<", ">", "-->", "---", ":::", "%%", "`", "@", "&", "\n", "://", "www."])
         expect(out.toLowerCase()).not.toContain(bad);
     }
@@ -115,6 +115,20 @@ describe("sanitizeStoryText", () => {
     expect(sanitizeStoryText("Prüfe Eingabe 検証", 60)).toBe("Prüfe Eingabe 検証");
     expect(sanitizeStoryText("a".repeat(100_000), 60)).toHaveLength(60);
     expect(sanitizeStoryText({ x: 1 }, 60)).toBe("");
+  });
+  it("keeps brackets, semicolons and quotes and escapes them per output", () => {
+    const t = 'Test checks [1, 2, NaN, Infinity, 3] gives 4';
+    expect(sanitizeStoryText(t, 60)).toBe(t);
+    expect(sanitizeStoryText('total() returns "4"; sum({a}) skips', 60)).toBe('total() returns "4"; sum({a}) skips');
+    const s = validateStory({ steps: [step("a", t, { change: "changed", before: 'list "x" (any)', after: "only [numbers]; else throw" }), step("b", `say "hi" it's`)] }, files)!;
+    const md = renderComment({ agg: agg as never, mode: "m", tokensEstimate: 0, notes: [], story: s, storyStyle: "svg", storyImageUrl: "https://example.com/s.svg" });
+    expect(md).toContain("Steps: 1. Test checks \\[1, 2, NaN, Infinity, 3\\] gives 4 (list \"x\" \\(any\\) -> only \\[numbers\\]; else throw); 2. say \"hi\" it's");
+    expect(md).toContain('alt="PR story: Test checks [1, 2, NaN, Infinity, 3] gives 4. say &quot;hi&quot; it&#39;s"');
+    const alt = md.match(/alt="([^"]*)"/)![1]!;
+    expect(alt).not.toMatch(/["<>]/);
+    const m = storyMermaid(s);
+    for (const l of m.split("\n").filter((x) => /^ {2}s\d\[/.test(x))) expect(l).toMatch(/^ {2}s\d\["[^"\]\[(){};]*"\]$/);
+    expect(m).toContain('s1["Test checks 1, 2, NaN, Infinity, 3 gives 4<br/>before: list x any<br/>after: only numbers else throw"]');
   });
   it("cannot break out of a quoted mermaid label end to end", () => {
     const s = validateStory({
@@ -168,9 +182,9 @@ const open = (extra: object = {}) => renderComment({
 });
 
 describe("sticky rendering", () => {
-  it("puts a collapsed chart with a text fallback right after What to check", () => {
+  it("puts an open chart with a text fallback right after What to check", () => {
     const md = open();
-    const i = md.indexOf("### What to check"), j = md.indexOf("<details><summary>What this PR does (AI-drawn, may be incomplete)</summary>");
+    const i = md.indexOf("### What to check"), j = md.indexOf("<details open><summary>What this PR does (AI-drawn, may be incomplete)</summary>");
     const k = md.indexOf("<details><summary><b>Why this lane?");
     expect(i).toBeGreaterThanOrEqual(0);
     expect(j).toBeGreaterThan(i);

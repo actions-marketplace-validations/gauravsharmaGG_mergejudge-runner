@@ -54056,10 +54056,10 @@ var configSchema = external_exports.object({
   /** stored = index snapshots in R2 + embeddings in Vectorize (Worker). none = temporary in-memory index per review, nothing persisted. */
   index: external_exports.object({ policy: external_exports.enum(["stored", "none"]).default("stored") }).default({ policy: "stored" }),
   budget: external_exports.object({
-    max_tokens_per_pr: external_exports.number().int().positive().default(28e3),
+    max_tokens_per_pr: external_exports.number().int().positive().default(4e4),
     /** Unset = per-model default (budget.ts: 8000 for reasoning models, else 2500). Set = used as is, clamped to the PR budget. */
     max_output_tokens: external_exports.number().int().positive().optional()
-  }).default({ max_tokens_per_pr: 28e3 }),
+  }).default({ max_tokens_per_pr: 4e4 }),
   approval: approvalSchema,
   /**
    * Opt-in PR description check. Off by default; when on, a PR whose body does not really answer the

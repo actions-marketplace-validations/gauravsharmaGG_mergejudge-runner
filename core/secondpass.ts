@@ -6,7 +6,7 @@
  * File lanes can only rise. Deterministic base-branch rules stay the floor (applied when lanes are aggregated).
  * auto means low risk, not a guarantee.
  */
-import { resolveOutputLimit, retryOutputLimit } from "./budget.js";
+import { exceedsCap, resolveOutputLimit, retryOutputLimit, usageTotal } from "./budget.js";
 import type { Config } from "./config.js";
 import { classifyLlmFailure, formatLlmFailure } from "./llm/http.js";
 import { completeWithMeta, type LlmProvider } from "./llm/provider.js";
@@ -33,6 +33,10 @@ export interface SecondPassOutcome {
   /** Shown in the sticky comment when this pass kept findings, or when it could not run. */
   note?: string;
   logLine: string;
+  /** Paths whose patch was cut in this pass's prompt. */
+  trimmedFiles?: string[];
+  /** The pass was not run because the per-PR token budget was used up. */
+  skipped?: boolean;
 }
 
 const findingKey = (f: { path: string; line?: number; message: string }): string =>
@@ -118,20 +122,32 @@ export async function runSecondPass(
   ctx: PromptContext,
   first: LlmTriage,
   log: (m: string) => void = () => {},
+  /** Cumulative per-PR budget: tokens spent so far and the cap. Without it the pass is not gated. */
+  budget?: { spent: number; cap: number },
 ): Promise<SecondPassOutcome> {
   const system = SECOND_PASS_RULES + policyBlock(ctx.policyText);
   const built = buildUserPrompt(input, cfg, system);
   const user = built.prompt + priorBlock(first.findings);
   const limit = resolveOutputLimit(cfg);
+  const trimmedFiles = built.trimmed.length ? { trimmedFiles: built.trimmed } : {};
+  const skipMsg = budget ? `per-PR token budget (${budget.cap}) used up` : "";
+  if (budget && exceedsCap(budget.spent, estimateTokens(system) + estimateTokens(user) + limit, budget.cap)) {
+    return {
+      llm: first, tokensEstimate: 0, outputTokens: 0, skipped: true, ...trimmedFiles,
+      note: `AI second pass skipped: ${skipMsg}.`,
+      logLine: `AI mode deep: second pass skipped (${skipMsg}). First-pass findings kept.`,
+    };
+  }
+  let spent = 0;
   let raw = "";
   let outputTokens = 0;
   let retried = false;
   const fail = (errorClass: string): SecondPassOutcome => {
     clearOptionalFatal(provider);
-    const tokensEstimate = estimateTokens(system) + estimateTokens(user) + estimateTokens(raw);
     return {
       llm: first,
-      tokensEstimate,
+      tokensEstimate: spent || estimateTokens(system) + estimateTokens(user) + estimateTokens(raw),
+      ...trimmedFiles,
       outputTokens,
       note: `Second pass unavailable (${errorClass}). First-pass findings kept.`,
       logLine: `AI mode deep: second pass unavailable (${errorClass}). First-pass findings kept.`,
@@ -139,29 +155,33 @@ export async function runSecondPass(
   };
   for (let attempt = 0; attempt < 2; attempt++) {
     const repair = attempt === 1;
-    if (repair) retried = true;
+    const sent = repair ? `${user}\n\n${retryInstruction(false)}` : user;
+    const maxOutputTokens = repair
+      ? retryOutputLimit(limit, cfg.budget.max_tokens_per_pr - estimateTokens(system) - estimateTokens(user) - 100)
+      : limit;
+    if (repair) {
+      if (budget && exceedsCap(budget.spent + spent, estimateTokens(system) + estimateTokens(sent) + maxOutputTokens, budget.cap)) return fail("parse");
+      retried = true;
+    }
+    let counted = false;
     try {
-      const r = await completeWithMeta(provider, {
-        system,
-        user: repair ? `${user}\n\n${retryInstruction(false)}` : user,
-        maxOutputTokens: repair
-          ? retryOutputLimit(limit, cfg.budget.max_tokens_per_pr - estimateTokens(system) - estimateTokens(user) - 100)
-          : limit,
-        jsonMode: true,
-      });
+      const r = await completeWithMeta(provider, { system, user: sent, maxOutputTokens, jsonMode: true });
+      counted = true;
+      spent += usageTotal(r.usage) ?? estimateTokens(system) + estimateTokens(sent) + estimateTokens(r.text);
       raw = r.text;
       outputTokens = r.outputTokens ?? estimateTokens(raw);
       const applied = applySecondPass(first, parseTriageOutput(raw), input.files);
-      const tokensEstimate = built.tokens + estimateTokens(priorBlock(first.findings)) + estimateTokens(raw);
       const logLine = `AI mode deep: second pass kept ${applied.kept} finding(s), dropped ${applied.dropped} whose quote did not match the diff${retried ? " (JSON repair retry)" : ""}.`;
       return {
         llm: applied.llm,
-        tokensEstimate,
+        tokensEstimate: spent,
         outputTokens,
         logLine,
+        ...trimmedFiles,
         ...(applied.kept > 0 ? { note: `Second pass kept ${applied.kept} finding(s) whose quote matches the diff.` } : {}),
       };
     } catch (e) {
+      if (!counted) spent += estimateTokens(system) + estimateTokens(sent);
       const stop = abortError(provider);
       if (stop) throw stop;
       const info = classifyLlmFailure(e, provider.providerId);

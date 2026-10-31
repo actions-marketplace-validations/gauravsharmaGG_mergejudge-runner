@@ -76,7 +76,7 @@ function mask(v: string): string {
   return v.length <= 12 ? `${v.slice(0, 4)}…` : `${v.slice(0, 4)}…${v.slice(-7)}`;
 }
 
-const isTestPath = (path: string): boolean =>
+export const isTestPath = (path: string): boolean =>
   /(^|\/)(tests?|__tests__|fixtures?)\//.test(path) || /\.(test|spec)\.[^/]+$/.test(path);
 
 interface SecretScan { blocked: string[]; skipped: string[] }

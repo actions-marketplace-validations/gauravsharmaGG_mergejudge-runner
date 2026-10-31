@@ -271,6 +271,7 @@ describe("config and separate call", () => {
     const ignored = await review("", mkProvider([], reply({ story: storyJson })));
     expect(ignored.body).not.toContain("What this PR does");
     const a = await review("", mkProvider([], reply()));
+    const lines: Record<string, string> = { throw: "provider error", garbage: "invalid reply", truncate: "reply cut off at the output limit" };
     for (const failure of ["throw", "garbage", "truncate"]) {
       const p: LlmProvider = { label: "fake", complete: async () => reply(), completeEx: async req => {
         if (req.system !== STORY_SYSTEM_PROMPT) return { text: reply(), truncated: false };
@@ -279,8 +280,9 @@ describe("config and separate call", () => {
       } };
       const b = await review("comment:\n  flow_chart: true\n", p);
       expect(b.agg).toEqual(a.agg); expect(b.findings).toEqual(a.findings);
-      // Only the footer differs: a failed story call still counts what was sent.
-      expect(b.body.replace(/ \(story \d+\)/, "").replace(/~\d+ tokens/, "")).toBe(a.body.replace(/~\d+ tokens/, ""));
+      // The footer differs (a failed story call still counts what was sent) and one Not-checked line says why.
+      expect(b.body).toContain(`- PR story: not drawn \\(${lines[failure]!.replace(/ /g, " ")}\\)`);
+      expect(b.body.replace(/- PR story: not drawn[^\n]*\n/, "").replace(/ \(story \d+\)/, "").replace(/~\d+ tokens/, "")).toBe(a.body.replace(/~\d+ tokens/, ""));
       expect(b.body).toMatch(/ \(story \d+\)/);
     }
   });

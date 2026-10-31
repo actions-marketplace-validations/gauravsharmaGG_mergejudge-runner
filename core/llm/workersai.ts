@@ -11,7 +11,9 @@ export class WorkersAiProvider implements LlmProvider {
   readonly label: string;
   readonly providerId: string;
   readonly supportsTools = false; // tool calling differs per model; deep mode falls back to context
-  constructor(private ai: WorkersAiBinding, private model: string, private onUsage?: UsageSink, private transport: Partial<LlmTransport> = {}) {
+  constructor(private ai: WorkersAiBinding, private model: string, private onUsage?: UsageSink, private transport: Partial<LlmTransport> = {},
+    /** Extra `ai.run` input fields per model (e.g. `reasoning_effort`); `messages`, `max_tokens` and `response_format` always win. */
+    private requestExtras: Record<string, unknown> = {}) {
     this.label = model;
     this.providerId = transport.providerId ?? "workers-ai";
   }
@@ -25,6 +27,7 @@ export class WorkersAiProvider implements LlmProvider {
     const out = (await withLlmRetries(
       (signal) => {
         const pending = this.ai.run(this.model, {
+          ...this.requestExtras,
           messages: [{ role: "system", content: req.system }, { role: "user", content: req.user }],
           max_tokens: req.maxOutputTokens,
           ...(req.jsonMode ? { response_format: { type: "json_object" } } : {}),

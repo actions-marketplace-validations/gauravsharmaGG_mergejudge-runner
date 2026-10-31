@@ -24,9 +24,16 @@ import { reviewGuard } from "./shepherdhandoff.js";
 import { addEntry, isProtectedPath, isShepherdOn, newShepherdState, upsertShepherdComment } from "./shepherd.js";
 import { runSecondPass } from "./secondpass.js";
 import { aiModeOf } from "./aimode.js";
-import { generateStory, storySvgHash } from "./storycall.js";
+import { generateStory, storyFailureLine, storySvgHash, storyTrimmedLine } from "./storycall.js";
+import { perPrCap } from "./budget.js";
 import { renderStorySvg } from "./storysvg.js";
 import type { Story } from "./story.js";
+
+/** One Not-checked line for the files whose diff was cut to fit the token budget (first names only). */
+export function trimmedNote(paths: string[]): string {
+  const shown = paths.slice(0, 5).join(", ");
+  return `Diff trimmed to fit the token budget: ${paths.length} ${paths.length === 1 ? "file" : "files"} (${shown}${paths.length > 5 ? `, +${paths.length - 5} more` : ""})`;
+}
 
 /** Rules-only note when the model call or its JSON could not be used. The class only: no provider body, no model text. */
 export function aiUnavailableNote(errorClass: string, truncated = false): string {
@@ -84,7 +91,7 @@ export interface ReviewInput {
   /** Override how context-mode files are fetched (tests). Defaults to the GitHub API at the head SHA. */
   contextSource?: ContextSource;
   /** Worker-only bindings, e.g. Cloudflare Workers AI (`provider.type: workers-ai`). */
-  bindings?: { ai?: WorkersAiBinding };
+  bindings?: { ai?: WorkersAiBinding; aiRequestExtras?: Record<string, unknown> };
   /** Per-repo known false alarms (Worker/D1). Shapes the prompt and downgrades/hides repeats; never changes a lane. */
   learned?: LearnedItem[];
   /** Writer lessons and outcome hints for the prompt's team-preferences section (context only; see src/learnedctx.ts). */
@@ -145,6 +152,8 @@ export interface CachedTriage {
  */
 export interface ReviewResult {
   story?: Story | null;
+  /** Paths whose diff was cut to fit the token budget (also shown in "Not checked"); present only when something was cut. */
+  trimmedFiles?: string[];
   storyImageUrl?: string | null;
   storyStyle?: "svg" | "mermaid";
   storyAnimate?: boolean;
@@ -254,6 +263,10 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
   let llm = null;
   let policies: Policies = { text: "", used: [], skipped: [] };
   let tokens = 0;
+  // Actual (else estimated) tokens spent by the review calls, and the per-PR cap they count against; the story call gets what is left.
+  let reviewSpent = 0;
+  let reviewCap = cfg.budget.max_tokens_per_pr;
+  let trimmedFiles: string[] = [];
   let usedMode: "diff" | "context" | "deep" = cfg.review.mode;
   let breakdown = null as null | import("./triage.js").TokenBreakdown;
   const cached = provider && o.llmCache ? await o.llmCache.get().catch(() => null) : null;
@@ -329,11 +342,17 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
       ? await runDeepTriage(provider, prompt, cfg, tctx, { tools }, log.info, log.warning)
       : await runTriage(provider, prompt, cfg, tctx, log.info, log.warning);
     if (res.deep?.stopped) notes.push(`AI tool budget exhausted (${res.deep.stopped}); further exploration was not checked.`);
+    // Per-PR cap, cumulative over every call of this review (actual usage where the provider reports it).
+    const cap = perPrCap(cfg, !!res.deep);
+    reviewCap = cap;
+    if (res.retrySkipped) notes.push(`AI retry skipped: per-PR token budget (${cap}) used up`);
+    const trimmedSet = new Set(res.trimmedFiles);
     // ai.mode deep: a second pass over the same numbered diff. Findings from that pass need a
     // verified quote. File lanes can only rise. Base-branch rules stay the floor inside aggregate.
     if (res.llm && aiModeOf(cfg) === "deep") {
-      const second = await runSecondPass(provider, prompt, cfg, tctx, res.llm, log.info);
+      const second = await runSecondPass(provider, prompt, cfg, tctx, res.llm, log.info, { spent: res.tokensEstimate, cap });
       if (second.note) notes.push(second.note);
+      for (const p of second.trimmedFiles ?? []) trimmedSet.add(p);
       log.info(second.logLine);
       res = {
         ...res,
@@ -349,6 +368,9 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
     }
     usedMode = retrievedDeep ? "deep" : mode;
     tokens = res.tokensEstimate;
+    reviewSpent = tokens;
+    trimmedFiles = [...trimmedSet];
+    if (trimmedFiles.length) notes.push(trimmedNote(trimmedFiles));
     llm = res.llm;
     breakdown = res.breakdown;
     log.info(
@@ -383,7 +405,10 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
   // Cache-only reviews skip the story call as well. All review/second-pass calls are finished here.
   if (cfg.comment.flow_chart && provider && llm && !cached && !o.skipAi && storyFiles.length) {
     // Story tokens (reported by the provider, else estimated) are shown in the footer only: `usage.tokens` and the llmCache stay review-only.
-    ({ story, tokens: storyTokens } = await generateStory(provider, { files: storyFiles, findings, log }));
+    const drawn = await generateStory(provider, { files: storyFiles, findings, log, model: cfg.provider.model, budgetLeft: reviewCap - reviewSpent });
+    ({ story, tokens: storyTokens } = drawn);
+    if (drawn.reason) notes.push(storyFailureLine(drawn.reason));
+    else if (drawn.trimmed) notes.push(storyTrimmedLine(drawn.trimmed));
     if (story && cfg.comment.flow_chart_style === "svg" && o.storyImage) {
       try {
         const svg = renderStorySvg(story, { animate: cfg.comment.flow_chart_animate });
@@ -402,6 +427,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
   return {
     schemaVersion: 1, kind: "review", prNumber: number, headSha: pr.head.sha, prNodeId: pr.node_id,
     story, storyImageUrl, storyStyle: cfg.comment.flow_chart_style, storyAnimate: cfg.comment.flow_chart_animate,
+    ...(trimmedFiles.length ? { trimmedFiles } : {}),
     lane: agg.lane, agg, body, findings, syncInline: !!llm && !cached && !o.shepherdCommit, ...(shepherdOn ? { shepherd: true } : {}),
     usage: {
       lane: agg.lane, mode: llm && provider ? usedMode : "rules-only", model: provider?.label ?? null,

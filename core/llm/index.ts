@@ -65,7 +65,7 @@ export function priceProvider(cfg: ProviderConfig): string {
 export function createProvider(
   cfg: ProviderConfig,
   env: KeySource = process.env,
-  bindings: { ai?: WorkersAiBinding; onCall?: (c: LlmCallUsage) => void } = {},
+  bindings: { ai?: WorkersAiBinding; onCall?: (c: LlmCallUsage) => void; /** Workers AI only: extra `ai.run` input fields, see WorkersAiProvider. */ aiRequestExtras?: Record<string, unknown> } = {},
 ): { provider: LlmProvider | null; note?: string } {
   if (cfg.type === "none") return { provider: null };
   if (!cfg.model) return { provider: null, note: "provider.model not set" };
@@ -74,7 +74,7 @@ export function createProvider(
   const transport = llmTransportFromConfig(cfg, env);
   if (cfg.type === "workers-ai") {
     if (!bindings.ai) return { provider: null, note: "Workers AI binding `AI` not available (Worker runtime only)" };
-    return { provider: new WorkersAiProvider(bindings.ai, model, onUsage, transport) };
+    return { provider: new WorkersAiProvider(bindings.ai, model, onUsage, transport, bindings.aiRequestExtras) };
   }
   const keyEnv = providerKeyEnv(cfg);
   const key = env[keyEnv];

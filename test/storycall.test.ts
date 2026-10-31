@@ -50,12 +50,12 @@ describe("separate story call", () => {
       const complete = vi.fn(() => new Promise<string>(() => {})); const warning = vi.fn();
       const pending = generateStory({ label: "fake", complete }, { files, findings: [], log: { warning } });
       await vi.advanceTimersByTimeAsync(STORY_TIMEOUT_MS);
-      expect(await pending).toEqual({ story: null, tokens: expect.any(Number) }); expect(complete).toHaveBeenCalledTimes(1); expect(warning).toHaveBeenCalledOnce();
+      expect(await pending).toEqual({ story: null, tokens: expect.any(Number), reason: expect.any(String) }); expect(complete).toHaveBeenCalledTimes(1); expect(warning).toHaveBeenCalledOnce();
     } finally { vi.useRealTimers(); }
   });
   it.each([null, {}, { steps: "bad" }, 42, []])("drops garbage %j", async garbage => {
     const warning = vi.fn();
-    expect(await generateStory({ label: "fake", complete: async () => JSON.stringify(garbage) }, { files, findings: [], log: { warning } })).toEqual({ story: null, tokens: expect.any(Number) });
+    expect(await generateStory({ label: "fake", complete: async () => JSON.stringify(garbage) }, { files, findings: [], log: { warning } })).toEqual({ story: null, tokens: expect.any(Number), reason: expect.any(String) });
     expect(warning).toHaveBeenCalledOnce();
   });
   it("skips rules-only, skipAi, empty/excluded files and cached-only reviews", async () => {

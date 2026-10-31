@@ -21,6 +21,7 @@ export const reviewResultSchema = z.object({
   body: z.string().max(65_536),
   findings: z.array(z.object({ path: z.string().max(1024), line: z.number().int().positive().optional(), message: z.string().max(4000) })).max(50),
   syncInline: z.boolean(),
+  trimmedFiles: z.array(z.string().max(1024)).max(3000).optional(),
   usage: z.looseObject({
     lane, mode: z.enum(["diff", "context", "deep", "rules-only"]), model: z.string().max(200).nullable(),
     cached: z.boolean(), breakdown: z.looseObject({}).nullable(), tokens: z.number().min(0),

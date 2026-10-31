@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Config } from "./config.js";
-import { COMPACT_JSON_INSTRUCTION, resolveOutputLimit, retryOutputLimit } from "./budget.js";
+import { COMPACT_JSON_INSTRUCTION, exceedsCap, resolveOutputLimit, retryOutputLimit, usageTotal } from "./budget.js";
 import { classifyLlmFailure, formatLlmFailure, LlmError } from "./llm/http.js";
 import { completeWithMeta, type LlmProvider } from "./llm/provider.js";
 import type { ContextPiece } from "./context.js";
@@ -123,7 +123,44 @@ export interface TokenBreakdown {
   skipped_diff_files: string[];
 }
 
-export function buildUserPrompt(input: PromptInput, cfg: Config, system: string = SYSTEM_PROMPT): { prompt: string; tokens: number; diffTokens: number; contextTokens: number } {
+/** Shown in place of the cut part of a patch. K of N diff lines are not shown; the wording tells the model the rest exists. */
+export const truncationMarker = (hidden: number, total: number): string =>
+  `[... truncated by MergeJudge: ${hidden} of ${total} diff lines not shown; code outside the shown hunks exists and was not reviewed ...]`;
+/** Characters reserved per cut patch for its marker (real markers are ~140). */
+const MARKER_RESERVE = 170;
+
+/** Appended after the data block, only when at least one patch was cut. Outside <untrusted_pr_data> on purpose: it is ours. */
+export const TRUNCATION_RULES = `MergeJudge note (not part of the pull request data): some diffs above were cut to fit the token budget and are marked "[... truncated by MergeJudge ...]". Code that is not shown may define or use any symbol. Do not report a symbol as undefined or missing, or a function as unused, based on a truncated patch.`;
+
+/**
+ * Fair split of `budget` characters: a text shorter than its fair share keeps its full length and gives the rest back
+ * to the longer ones (water-filling). Returns one allowance per input, in input order.
+ */
+export function waterFill(lengths: number[], budget: number): number[] {
+  const alloc = new Array<number>(lengths.length).fill(0);
+  let left = Math.max(0, budget);
+  let n = lengths.length;
+  for (const i of lengths.map((_, k) => k).sort((a, b) => lengths[a]! - lengths[b]! || a - b)) {
+    const share = Math.floor(left / n--);
+    alloc[i] = Math.min(lengths[i]!, share);
+    left -= alloc[i]!;
+  }
+  return alloc;
+}
+
+/** Keep at most `max` chars of a patch, ending at a hunk boundary when that wastes less than half, else at a line end. */
+export function cutPatch(text: string, max: number): string {
+  if (text.length <= max) return text;
+  if (max <= 0) return "";
+  const line = text.lastIndexOf("\n", max);
+  if (line <= 0) return text.slice(0, max);
+  const hunk = text.lastIndexOf("\n@@", max);
+  return text.slice(0, hunk > 0 && hunk >= line / 2 ? hunk : line);
+}
+
+const lineCount = (s: string): number => (s ? s.split("\n").length : 0);
+
+export function buildUserPrompt(input: PromptInput, cfg: Config, system: string = SYSTEM_PROMPT): { prompt: string; tokens: number; diffTokens: number; contextTokens: number; trimmed: string[] } {
   const ctxText = renderContext(input.context ?? []);
   const budgetChars =
     Math.max(
@@ -137,17 +174,32 @@ export function buildUserPrompt(input: PromptInput, cfg: Config, system: string 
     `### ${sanitizeUntrusted(f.path)} (${f.status}, +${f.additions}/-${f.deletions})${cands.has(f.path) ? ` ${CODE_AUTO_MARK}` : ""}`;
   const fixed =
     title.length + body.length + input.files.reduce((n, f) => n + header(f).length + 8, 0) + 200;
-  const withPatch = input.files.filter((f) => f.patch);
-  const perPatch = withPatch.length
-    ? Math.max(0, Math.floor((budgetChars - fixed) / withPatch.length))
-    : 0;
+  const texts = new Map<PrFile, string>();
+  for (const f of input.files) if (f.patch) texts.set(f, sanitizeUntrusted(numberPatch(f.patch)));
+  const withPatch = [...texts.keys()];
+  const lengths = withPatch.map((f) => texts.get(f)!.length);
+  const room = budgetChars - fixed;
+  // Fair split first. If something is cut, each cut patch needs room for its marker (and the note), so split again until stable.
+  let alloc = waterFill(lengths, room);
+  for (let round = 0; round < 3; round++) {
+    const cut = alloc.filter((a, i) => a < lengths[i]!).length;
+    if (!cut) break;
+    alloc = waterFill(lengths, room - cut * MARKER_RESERVE - TRUNCATION_RULES.length);
+  }
+  const allowance = new Map(withPatch.map((f, i) => [f, alloc[i]!]));
+  const trimmed: string[] = [];
   const parts = input.files.map((f) => {
-    const patch = f.patch && perPatch > 0 ? "\n" + truncate(sanitizeUntrusted(numberPatch(f.patch)), perPatch) : "";
-    return header(f) + patch;
+    const text = texts.get(f);
+    if (text === undefined) return header(f);
+    const max = allowance.get(f)!;
+    if (max >= text.length) return `${header(f)}\n${text}`;
+    trimmed.push(f.path);
+    const shown = cutPatch(text, max - MARKER_RESERVE);
+    return `${header(f)}\n${shown ? shown + "\n" : ""}${truncationMarker(lineCount(text) - lineCount(shown), lineCount(text))}`;
   });
-  const prompt = `<${DELIM}>\nTitle: ${title}\nDescription:\n${body}\n\nChanged files:\n${parts.join("\n\n")}${ctxText}\n</${DELIM}>`;
+  const prompt = `<${DELIM}>\nTitle: ${title}\nDescription:\n${body}\n\nChanged files:\n${parts.join("\n\n")}${ctxText}\n</${DELIM}>${trimmed.length ? `\n\n${TRUNCATION_RULES}` : ""}`;
   const contextTokens = estimateTokens(ctxText);
-  return { prompt, tokens: estimateTokens(prompt) + estimateTokens(system), diffTokens: estimateTokens(prompt) - contextTokens, contextTokens };
+  return { prompt, tokens: estimateTokens(prompt) + estimateTokens(system), diffTokens: estimateTokens(prompt) - contextTokens, contextTokens, trimmed };
 }
 
 /** Parse unified diff hunks: returns new-file line numbers visible in the diff (added + context). */
@@ -341,6 +393,10 @@ export interface TriageResult {
   truncated?: boolean;
   /** Output-token limit of the first call. */
   outputLimit?: number;
+  /** The single retry was not made because the per-PR token budget (`budget.max_tokens_per_pr`) was used up. */
+  retrySkipped?: boolean;
+  /** Paths whose patch was cut (or left out) of the prompt to fit the token budget. */
+  trimmedFiles?: string[];
   /** Deep mode only: how the loop ended. */
   deep?: { steps: number; toolCalls: number; modelCalls: number; stopped?: "steps" | "tokens" | "time" };
 }
@@ -383,14 +439,17 @@ export async function runTriage(
   log: (m: string) => void = () => {}, warn: (m: string) => void = log,
 ): Promise<TriageResult> {
   const system = buildSystemPrompt(ctx) + codeAutoPrompt(input.files, cfg) + (input.context?.length ? `\n\n${CONTEXT_RULES}` : "");
-  const { prompt, diffTokens: diffOnly, contextTokens } = buildUserPrompt(input, cfg, system);
+  const { prompt, diffTokens: diffOnly, contextTokens, trimmed } = buildUserPrompt(input, cfg, system);
   const diffTokens = diffOnly + contextTokens; // total user-prompt tokens; context reported separately
   const skipped = ctx.skippedDiffFiles ?? [];
   let raw = "";
   let retried = false;
   const limit = resolveOutputLimit(cfg);
   let retryLimit = limit;
-  let firstTruncated = false, firstOut = 0, lastTruncated = false;
+  let firstTruncated = false, firstOut = 0, lastTruncated = false, retrySkipped = false;
+  // Tokens spent so far over all calls: provider-reported usage where there is one, else the estimate of what was sent and received.
+  let spent = 0, firstErr: unknown;
+  const extra = { ...(trimmed.length ? { trimmedFiles: trimmed } : {}) };
   const mkBreakdown = (outTok: number) =>
     ({ ...tokenBreakdown({ systemBase: system, policyText: ctx.policyText, criteria: ctx.criteria, diffTokens: diffOnly, outputTokens: outTok, skipped }),
       context: contextTokens, total: estimateTokens(system) + diffTokens + outTok });
@@ -398,17 +457,27 @@ export async function runTriage(
   try {
     for (let attempt = 0; attempt < 2; attempt++) {
       const repair = attempt === 1;
+      const user = repair ? `${prompt}\n\n${retryInstruction(firstTruncated)}` : prompt;
       if (repair) {
-        retried = true;
         retryLimit = retryOutputLimit(limit, cfg.budget.max_tokens_per_pr - estimateTokens(system) - estimateTokens(prompt) - 100);
+        // The cap is cumulative: a retry that would push the review past it is not made.
+        if (exceedsCap(spent, estimateTokens(system) + estimateTokens(user) + retryLimit, cfg.budget.max_tokens_per_pr)) {
+          retrySkipped = true;
+          log(`LLM retry skipped: ${spent} tokens spent of the ${cfg.budget.max_tokens_per_pr} per-PR budget`);
+          break;
+        }
+        retried = true;
       }
+      let counted = false;
       try {
         const r = await completeWithMeta(provider, {
           system,
-          user: repair ? `${prompt}\n\n${retryInstruction(firstTruncated)}` : prompt,
+          user,
           maxOutputTokens: repair ? retryLimit : limit,
           jsonMode: true,
         });
+        counted = true;
+        spent += usageTotal(r.usage) ?? estimateTokens(system) + estimateTokens(user) + estimateTokens(r.text);
         raw = r.text;
         lastTruncated = r.truncated;
         if (!repair) { firstTruncated = r.truncated; firstOut = r.outputTokens ?? estimateTokens(raw); }
@@ -424,14 +493,16 @@ export async function runTriage(
           log("LLM JSON parse succeeded on repair attempt.");
           warn(outputLimitWarning({ ref: ctx.ref, model: cfg.provider.model, limit, retryLimit, outputTokens: firstOut, truncated: firstTruncated, retry: "succeeded" }));
         }
-        return { llm, tokensEstimate: estimateTokens(system) + diffTokens + outTok, breakdown: mkBreakdown(outTok), retried, ...(firstTruncated ? { truncated: true } : {}), outputLimit: limit };
+        return { llm, tokensEstimate: spent, breakdown: mkBreakdown(outTok), retried, ...(firstTruncated ? { truncated: true } : {}), outputLimit: limit, ...extra };
       } catch (e) {
+        if (!counted) spent += estimateTokens(system) + estimateTokens(user);
         const info = classifyLlmFailure(e, provider.providerId);
         log(`LLM JSON attempt ${attempt + 1} failed: ${formatLlmFailure(info)}`);
+        firstErr ??= e;
         if (attempt === 1) throw e;
       }
     }
-    throw new LlmError("parse", { provider: provider.providerId });
+    throw retrySkipped && firstErr ? firstErr : new LlmError("parse", { provider: provider.providerId });
   } catch (e) {
     const info = classifyLlmFailure(e, provider.providerId);
     const outTok = estimateTokens(raw);
@@ -440,11 +511,13 @@ export async function runTriage(
     return {
       llm: null,
       error: info.errorClass,
-      tokensEstimate: estimateTokens(system) + diffTokens + outTok,
+      tokensEstimate: spent,
       breakdown: mkBreakdown(outTok),
       retried,
+      ...(retrySkipped ? { retrySkipped: true } : {}),
       ...(firstTruncated || lastTruncated ? { truncated: true } : {}),
       outputLimit: limit,
+      ...extra,
     };
   }
 }

@@ -377,11 +377,13 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
       notes.push(`Known false alarms in this repo: ${res.suppressed.length} finding(s) hidden, ${res.downgraded.length} listed without an inline comment (manage them in the MergeJudge panel).`);
   }
   let story: Story | null = null;
+  let storyTokens = 0;
   let storyImageUrl: string | null = null;
   const storyFiles = excludeFromLlm(files, cfg.diff_exclude).kept;
   // Cache-only reviews skip the story call as well. All review/second-pass calls are finished here.
   if (cfg.comment.flow_chart && provider && llm && !cached && !o.skipAi && storyFiles.length) {
-    ({ story } = await generateStory(provider, { files: storyFiles, findings, log }));
+    // Story tokens (reported by the provider, else estimated) are shown in the footer only: `usage.tokens` and the llmCache stay review-only.
+    ({ story, tokens: storyTokens } = await generateStory(provider, { files: storyFiles, findings, log }));
     if (story && cfg.comment.flow_chart_style === "svg" && o.storyImage) {
       try {
         const svg = renderStorySvg(story, { animate: cfg.comment.flow_chart_animate });
@@ -391,7 +393,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
   }
   o.onNotes?.([...notes]);
   const body = renderComment({
-    agg, mode: llm && provider ? provider.label : "rules-only", tokensEstimate: tokens, notes,
+    agg, mode: llm && provider ? provider.label : "rules-only", tokensEstimate: tokens, ...(storyTokens ? { storyTokens } : {}), notes,
     policyFiles: policies.used, fileFindings: findings.filter((f) => f.line === undefined),
     breakdown: breakdown ?? undefined, approval: cfg.approval, laneMap: cfg.review.lane_map, prUrl: pr.html_url,
     story, storyImageUrl, storyStyle: cfg.comment.flow_chart_style, storyAnimate: cfg.comment.flow_chart_animate,

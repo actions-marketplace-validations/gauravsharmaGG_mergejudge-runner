@@ -4,6 +4,8 @@ import { generateStory, STORY_OUTPUT_SCHEMA, STORY_SYSTEM_PROMPT, STORY_TIMEOUT_
 import { produceReviewResult } from "../core/review.js";
 import { parseConfig } from "../core/config.js";
 import type { LlmProvider, LlmRequest } from "../core/llm/provider.js";
+import { createProvider, type LlmCallUsage } from "../core/llm/index.js";
+import { renderComment } from "../core/render.js";
 import { EngineProvider } from "../src/engine.js";
 import { makeFakeCodex } from "./helpers.js";
 
@@ -48,12 +50,12 @@ describe("separate story call", () => {
       const complete = vi.fn(() => new Promise<string>(() => {})); const warning = vi.fn();
       const pending = generateStory({ label: "fake", complete }, { files, findings: [], log: { warning } });
       await vi.advanceTimersByTimeAsync(STORY_TIMEOUT_MS);
-      expect(await pending).toEqual({ story: null }); expect(complete).toHaveBeenCalledTimes(1); expect(warning).toHaveBeenCalledOnce();
+      expect(await pending).toEqual({ story: null, tokens: expect.any(Number) }); expect(complete).toHaveBeenCalledTimes(1); expect(warning).toHaveBeenCalledOnce();
     } finally { vi.useRealTimers(); }
   });
   it.each([null, {}, { steps: "bad" }, 42, []])("drops garbage %j", async garbage => {
     const warning = vi.fn();
-    expect(await generateStory({ label: "fake", complete: async () => JSON.stringify(garbage) }, { files, findings: [], log: { warning } })).toEqual({ story: null });
+    expect(await generateStory({ label: "fake", complete: async () => JSON.stringify(garbage) }, { files, findings: [], log: { warning } })).toEqual({ story: null, tokens: expect.any(Number) });
     expect(warning).toHaveBeenCalledOnce();
   });
   it("skips rules-only, skipAi, empty/excluded files and cached-only reviews", async () => {
@@ -95,7 +97,7 @@ describe("separate story call", () => {
     expect(hook.mock.calls[0]).toEqual(hook.mock.calls[1]);
     expect(a.storyImageUrl).toBe("https://example.com/a.svg"); expect(b.body).toContain('<img src=');
     const fail = await produceReviewResult({ ...input, cfg: config(), provider: provider([]), storyImage: async () => { throw new Error("upload"); } });
-    expect(fail.body).not.toContain('<img src='); expect(fail.body).toContain("Steps: 1."); expect(fail.agg).toEqual(a.agg);
+    expect(fail.body).not.toContain('<img src='); expect(fail.body).toContain("\n1. "); expect(fail.agg).toEqual(a.agg);
   });
   it("strict story schema requires all properties and makes optional values nullable", () => {
     function walk(n: any) {
@@ -115,5 +117,33 @@ describe("separate story call", () => {
     expect((await generateStory(p, { files, findings: [], log })).story).toBeNull(); expect(p.fatal).toBeNull();
     fake.set({ mode: "ok", reply: reviewReply });
     expect(await p.complete({ system: "review", user: "diff", maxOutputTokens: 1000 })).toBe(reviewReply);
+  });
+  it("labels usage purpose: review for review calls, story for the story call", async () => {
+    const calls: LlmCallUsage[] = [];
+    const fetchMock = vi.fn(async (_u: unknown, init?: { body?: string }) => {
+      const story = JSON.parse(init!.body!).messages[0].content === STORY_SYSTEM_PROMPT;
+      return new Response(JSON.stringify({ choices: [{ message: { content: story ? response : reviewReply }, finish_reason: "stop" }], usage: { prompt_tokens: story ? 300 : 1000, completion_tokens: story ? 50 : 100 } }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const cfg = config();
+      const { provider: p } = createProvider(cfg.provider, { OPENAI_API_KEY: "k" }, { onCall: c => calls.push(c) });
+      const r = await produceReviewResult({ ...input, cfg, provider: p });
+      expect(calls.map(c => c.purpose)).toEqual(["review", "story"]);
+      expect(calls[1]!.usage).toMatchObject({ input: 300, output: 50 });
+      // Actual provider usage for the story; usage.tokens stays the review estimate only.
+      expect(r.body).toMatch(/~\d+ tokens \(story 350\)/);
+      const reviewOnly = Number(/~(\d+) tokens/.exec(r.body)![1]) - 350;
+      expect(r.usage.tokens).toBe(reviewOnly);
+    } finally { vi.unstubAllGlobals(); }
+  });
+  it("shows the story tokens in the footer only when a story call ran", async () => {
+    const withStory = await produceReviewResult({ ...input, cfg: config(), provider: provider([]) });
+    expect(withStory.body).toMatch(/~\d+ tokens \(story \d+\) ·/);
+    const off = await produceReviewResult({ ...input, cfg: parseConfig("provider:\n  type: openai\n  model: fake\n"), provider: provider([]) });
+    expect(off.body).toMatch(/~\d+ tokens ·/); expect(off.body).not.toContain("(story");
+    const agg = withStory.agg as never;
+    expect(renderComment({ agg, mode: "m", tokensEstimate: 100, storyTokens: 40, notes: [] })).toContain("~140 tokens (story 40) ·");
+    expect(renderComment({ agg, mode: "m", tokensEstimate: 100, notes: [] })).toContain("~100 tokens ·");
   });
 });

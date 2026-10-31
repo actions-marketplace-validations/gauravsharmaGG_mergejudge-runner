@@ -7,6 +7,8 @@ export interface LlmRequest {
   maxOutputTokens: number;
   /** Prefer JSON-object responses when the endpoint supports it (OpenAI-compatible). */
   jsonMode?: boolean;
+  /** What the call is for, passed to the usage sink; absent means "review". */
+  purpose?: "review" | "story";
 }
 
 /**
@@ -16,15 +18,15 @@ export interface LlmRequest {
 export interface LlmUsage { input: number; output: number; cacheRead: number; cacheWrite: number }
 
 /** Called once per model call. `usage` is null when the response carried no usage field (the call still happened). */
-export type UsageSink = (usage: LlmUsage | null) => void;
+export type UsageSink = (usage: LlmUsage | null, purpose?: "review" | "story") => void;
 
 /** Non-negative integer from an untrusted JSON number, else 0. */
 export const tokenCount = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
 
 /** Report a call to the sink; a sink that throws never fails the review. */
-export function reportUsage(sink: UsageSink | undefined, usage: LlmUsage | null): void {
+export function reportUsage(sink: UsageSink | undefined, usage: LlmUsage | null, purpose?: "review" | "story"): void {
   if (!sink) return;
-  try { sink(usage); } catch { /* metering must never break a review */ }
+  try { sink(usage, purpose); } catch { /* metering must never break a review */ }
 }
 
 /** OpenAI-style counts (Chat Completions, Responses, z.ai): the prompt total includes the cached part. */
@@ -34,7 +36,7 @@ export function openAiUsage(prompt: unknown, completion: unknown, cached: unknow
 }
 
 /** Reply text plus whether the provider cut it off at the output limit. */
-export interface LlmResult { text: string; truncated: boolean; outputTokens?: number }
+export interface LlmResult { text: string; truncated: boolean; outputTokens?: number; /** Provider-reported usage of this call, when the response had it. */ usage?: LlmUsage | null }
 
 /**
  * Cut off at the limit: the provider said so (finish_reason "length", stop_reason "max_tokens", status incomplete), or,

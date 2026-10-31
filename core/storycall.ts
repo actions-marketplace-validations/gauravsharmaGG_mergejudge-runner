@@ -1,5 +1,5 @@
 import { completeWithMeta, type LlmProvider } from "./llm/provider.js";
-import { DELIM, diffLines, sanitizeUntrusted, type Finding } from "./triage.js";
+import { DELIM, diffLines, estimateTokens, sanitizeUntrusted, type Finding } from "./triage.js";
 import { validateStory, type Story } from "./story.js";
 import type { PrFile } from "./types.js";
 
@@ -23,8 +23,9 @@ export const STORY_TIMEOUT_MS = 45000;
 export async function generateStory(provider: LlmProvider, o: {
   files: PrFile[]; findings: Finding[]; maxDiffChars?: number;
   log: { warning(m: string): void };
-}): Promise<{ story: Story | null }> {
+}): Promise<{ story: Story | null; tokens: number }> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let tokens = 0; // a failed call still counts what was sent
   try {
     const cap = Math.max(0, Math.min(24000, o.maxDiffChars ?? 24000));
     let diff = "";
@@ -33,19 +34,23 @@ export async function generateStory(provider: LlmProvider, o: {
       diff += `${f.path}\n${f.patch ?? "(patch unavailable)"}\n`.slice(0, cap - diff.length);
     }
     const findings = o.findings.slice(0, 20).map(f => `${f.path}:${f.line ?? "file"} review ${f.message.slice(0, 200)}`).join("\n").slice(0, 4000);
+    const user = `Diff:\n<${DELIM}>\n${sanitizeUntrusted(diff)}\n</${DELIM}>\nFinal findings:\n<${DELIM}>\n${sanitizeUntrusted(findings)}\n</${DELIM}>`;
+    tokens = estimateTokens(STORY_SYSTEM_PROMPT) + estimateTokens(user);
     const request = completeWithMeta(provider, {
-      system: STORY_SYSTEM_PROMPT,
-      user: `Diff:\n<${DELIM}>\n${sanitizeUntrusted(diff)}\n</${DELIM}>\nFinal findings:\n<${DELIM}>\n${sanitizeUntrusted(findings)}\n</${DELIM}>`,
-      jsonMode: true, maxOutputTokens: 1200, budgetMs: STORY_TIMEOUT_MS, maxRetries: 0, outputSchema: STORY_OUTPUT_SCHEMA,
+      system: STORY_SYSTEM_PROMPT, user,
+      jsonMode: true, purpose: "story", maxOutputTokens: 1200, budgetMs: STORY_TIMEOUT_MS, maxRetries: 0, outputSchema: STORY_OUTPUT_SCHEMA,
     });
     const result = await Promise.race([request, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), STORY_TIMEOUT_MS); })]);
+    // Provider-reported usage when the response had it, else the estimate of what was sent plus the reply.
+    const u = result.usage;
+    tokens = u ? u.input + u.output + u.cacheRead + u.cacheWrite : tokens + estimateTokens(result.text);
     if (result.truncated) throw new Error("truncated");
     const story = validateStory(JSON.parse(result.text), o.files.map(f => ({ path: f.path, lines: f.patch ? diffLines(f.patch) : null })));
     if (!story) throw new Error("invalid");
-    return { story };
+    return { story, tokens };
   } catch {
     o.log.warning("PR story unavailable; using the review without a story.");
-    return { story: null };
+    return { story: null, tokens };
   } finally { clearTimeout(timer); }
 }
 

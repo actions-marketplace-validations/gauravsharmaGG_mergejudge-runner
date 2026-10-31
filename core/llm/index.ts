@@ -41,8 +41,8 @@ export function providerBaseUrl(cfg: ProviderConfig): string {
   return "https://api.openai.com/v1";
 }
 
-/** One metered model call: who was called (price-table provider key) and what the response said it used. */
-export interface LlmCallUsage { provider: string; model: string; usage: LlmUsage | null }
+/** One metered model call: who was called (price-table provider key) and what the response said it used. `purpose` tells the PR story call from review calls (absent = review). */
+export interface LlmCallUsage { provider: string; model: string; usage: LlmUsage | null; purpose?: "review" | "story" }
 
 const OFFICIAL_HOSTS: Record<string, string> = { "api.anthropic.com": "anthropic", "api.openai.com": "openai" };
 
@@ -70,7 +70,7 @@ export function createProvider(
   if (cfg.type === "none") return { provider: null };
   if (!cfg.model) return { provider: null, note: "provider.model not set" };
   const model = cfg.model;
-  const onUsage = bindings.onCall ? (usage: LlmUsage | null) => bindings.onCall!({ provider: priceProvider(cfg), model, usage }) : undefined;
+  const onUsage = bindings.onCall ? (usage: LlmUsage | null, purpose?: "review" | "story") => bindings.onCall!({ provider: priceProvider(cfg), model, usage, purpose: purpose ?? "review" }) : undefined;
   const transport = llmTransportFromConfig(cfg, env);
   if (cfg.type === "workers-ai") {
     if (!bindings.ai) return { provider: null, note: "Workers AI binding `AI` not available (Worker runtime only)" };

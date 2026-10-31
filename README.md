@@ -252,7 +252,7 @@ The PR story is a short picture of what a pull request does, shown in the MergeJ
 
 5. Optional: set `comment.flow_chart_style: mermaid` for a Mermaid chart instead of SVG (no host needed), or `comment.flow_chart_animate: false` for a static chart.
 
-6. What users see: an open "What this PR does (AI-drawn, may be incomplete)" block with the chart (if hosted) and a numbered list of up to 6 steps, for example `Steps: 1. Validate the input; 2. Skip invalid values; 3. Return the total`. Changed steps show before and after. The block can be collapsed, and GitHub's mobile app may show only the list.
+6. What users see: an open "What this PR does (AI-drawn, may be incomplete)" block with the chart (if hosted) and the numbered steps (up to 6, for example `1. Validate the input`, `2. Skip invalid values`, `3. Return the total`; changed steps show before and after). Under a chart the steps sit in a collapsed "Steps as text" block and in the image alt text; with no chart (no host, or the comment is over the size cap) the numbered list is shown open, so GitHub's mobile app still has the text.
 
 **Turn it off**
 
@@ -263,7 +263,7 @@ The PR story is a short picture of what a pull request does, shown in the MergeJ
 **Cost and limits**
 
 - A separate advisory AI call after final findings: a 583-character system prompt (about 150 tokens) and a 105-character envelope, plus at most 24,000 diff characters and 4,000 finding characters in, and up to 1,200 tokens out (on 43 benchmark PRs the story JSON was 1,400 to 3,300 characters). The review request is unchanged.
-- Rules-only, skipped-AI, empty/excluded-file and cached-only reviews skip story generation. Calls use existing provider usage reporting; usage has no purpose label, so story tokens are counted with the same model. Runner engines keep their existing engine-call accounting.
+- Rules-only, skipped-AI, empty/excluded-file and cached-only reviews skip story generation. Calls use existing provider usage reporting; each call reported to `onLlmCall` carries `purpose: "review"` or `"story"`. The comment footer shows the total and the split, for example `~4801 tokens (story 1606)`; `usage.tokens` and the LLM cache stay review-only. Runner engines keep their existing engine-call accounting.
 - A failed story call or upload leaves the review unchanged.
 - Story text keeps brackets, quotes and semicolons, escaped for SVG, HTML and markdown; Mermaid labels turn them into spaces. SVG respects reduced-motion preferences.
 - Hosted Apps can supply their own image hook later; no hosted storage is included.

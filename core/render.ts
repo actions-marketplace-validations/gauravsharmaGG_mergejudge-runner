@@ -46,6 +46,8 @@ export interface RenderInput {
   agg: Aggregate;
   mode: string; // "rules-only" or model name
   tokensEstimate: number;
+  /** Tokens of the separate PR story call; shown in the footer as `(story N)` and added to the total. Not part of the review estimate. */
+  storyTokens?: number;
   notes: string[];
   /** File-level LLM findings (no valid diff line). */
   fileFindings?: { path: string; message: string }[];
@@ -378,7 +380,7 @@ export function renderComment(r: RenderInput): string {
   const unchecked = notChecked(r);
   const tail: string[] = [...(unchecked ? [unchecked] : []), "---", "", renderFeedback(rubric), ""];
   tail.push(
-    `<sub>${r.mode === "rules-only" ? "rules-only · " : ""}~${r.tokensEstimate} tokens · ${mergeNote(r.approval)} · To make <code>block</code> stop merges, require <code>${CHECK_NAME}</code> in branch protection.</sub>`,
+    `<sub>${r.mode === "rules-only" ? "rules-only · " : ""}~${r.tokensEstimate + (r.storyTokens ?? 0)} tokens${r.storyTokens ? ` (story ${r.storyTokens})` : ""} · ${mergeNote(r.approval)} · To make <code>block</code> stop merges, require <code>${CHECK_NAME}</code> in branch protection.</sub>`,
     "",
     "<details><summary><sub>Run details</sub></summary>",
     "",

@@ -54903,13 +54903,36 @@ function storyMermaid(story, animate = true) {
   if (ids("changed")) out.push("  classDef changed stroke-width:2px", `  class ${ids("changed")} changed`);
   return out.join("\n");
 }
+var ALT_MAX_CHARS = 400;
+var stepText = (s, esc3) => `${esc3(s.title)}${s.change === "changed" && s.before && s.after ? ` (${esc3(s.before)} -> ${esc3(s.after)})` : ""}`;
+function storyAlt(story) {
+  const parts = story.steps.map((s, i) => `${i + 1}. ${stepText(s, (t) => t)}.`);
+  const fits = (t) => attr(t).length <= ALT_MAX_CHARS;
+  let out = "PR story:";
+  for (const [i, p] of parts.entries()) {
+    const next = `${out} ${p}`;
+    if (!fits(next + (i + 1 < parts.length ? "..." : ""))) {
+      if (i === 0) {
+        let cut = Array.from(next);
+        while (cut.length && !fits(cut.join("") + "...")) cut = cut.slice(0, -8);
+        out = cut.join("").replace(/\s+\S*$/, "");
+      }
+      return attr(out + "...");
+    }
+    out = next;
+  }
+  return attr(out);
+}
 function renderStorySection(story, animate = true, style = "svg", imageUrl, chart = true) {
   const image = imageUrl && /^https:\/\/[^\s<>"']+$/.test(imageUrl) ? imageUrl.replace(/&/g, "&amp;") : null;
+  const mermaid = chart && style === "mermaid";
+  const img = chart && !mermaid && image;
+  const steps = story.steps.map((s, i) => `${i + 1}. ${stepText(s, mdText)}`);
   return [
     "<details open><summary>What this PR does (AI-drawn, may be incomplete)</summary>",
     "",
-    ...chart && style === "mermaid" ? ["```mermaid", storyMermaid(story, animate), "```", ""] : chart && image ? [`<img src="${image}" alt="PR story: ${attr(sanitizeStoryText(story.steps.map((s) => s.title).join(". "), 350))}" width="440">`, ""] : [],
-    `Steps: ${story.steps.map((s, i) => `${i + 1}. ${mdText(s.title)}${s.change === "changed" && s.before && s.after ? ` (${mdText(s.before)} -> ${mdText(s.after)})` : ""}`).join("; ")}`,
+    ...mermaid ? ["```mermaid", storyMermaid(story, animate), "```", ""] : img ? [`<img src="${image}" alt="${storyAlt(story)}" width="440">`, ""] : [],
+    ...mermaid || img ? ["<details><summary>Steps as text</summary>", "", ...steps, "</details>"] : steps,
     "",
     "</details>",
     ""
@@ -55181,7 +55204,7 @@ function renderComment(r) {
   const unchecked = notChecked(r);
   const tail = [...unchecked ? [unchecked] : [], "---", "", renderFeedback(rubric), ""];
   tail.push(
-    `<sub>${r.mode === "rules-only" ? "rules-only \xB7 " : ""}~${r.tokensEstimate} tokens \xB7 ${mergeNote(r.approval)} \xB7 To make <code>block</code> stop merges, require <code>${CHECK_NAME}</code> in branch protection.</sub>`,
+    `<sub>${r.mode === "rules-only" ? "rules-only \xB7 " : ""}~${r.tokensEstimate + (r.storyTokens ?? 0)} tokens${r.storyTokens ? ` (story ${r.storyTokens})` : ""} \xB7 ${mergeNote(r.approval)} \xB7 To make <code>block</code> stop merges, require <code>${CHECK_NAME}</code> in branch protection.</sub>`,
     "",
     "<details><summary><sub>Run details</sub></summary>",
     "",
@@ -57667,10 +57690,10 @@ async function postJson(url2, headers, body, transport) {
 
 // core/llm/provider.ts
 var tokenCount = (v) => typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
-function reportUsage(sink, usage) {
+function reportUsage(sink, usage, purpose) {
   if (!sink) return;
   try {
-    sink(usage);
+    sink(usage, purpose);
   } catch {
   }
 }
@@ -58444,10 +58467,11 @@ var AnthropicProvider = class {
       },
       this.http(req.budgetMs, "maxRetries" in req && typeof req.maxRetries === "number" ? req.maxRetries : void 0)
     );
-    reportUsage(this.onUsage, anthropicUsage(data.usage));
+    const usage = anthropicUsage(data.usage);
+    reportUsage(this.onUsage, usage, req.purpose);
     const text3 = (data.content ?? []).filter((b) => b.type === "text" && typeof b.text === "string").map((b) => b.text).join("");
     const outputTokens = tokenCount(data.usage?.output_tokens);
-    return { text: text3, truncated: isTruncated(data.stop_reason === "max_tokens", outputTokens, req.maxOutputTokens), outputTokens };
+    return { text: text3, truncated: isTruncated(data.stop_reason === "max_tokens", outputTokens, req.maxOutputTokens), outputTokens, usage };
   }
   async chat(req) {
     const data = await postJson(
@@ -58542,12 +58566,13 @@ var OpenAiProvider = class {
       },
       this.http(req.budgetMs, "maxRetries" in req && typeof req.maxRetries === "number" ? req.maxRetries : void 0)
     );
-    reportUsage(this.onUsage, oaUsage(data.usage));
+    const usage = oaUsage(data.usage);
+    reportUsage(this.onUsage, usage, req.purpose);
     const content2 = data.choices?.[0]?.message?.content;
     const outputTokens = tokenCount(data.usage?.completion_tokens);
     const truncated = isTruncated(data.choices?.[0]?.finish_reason === "length", outputTokens, req.maxOutputTokens);
     if (typeof content2 !== "string" && !truncated) this.empty();
-    return { text: typeof content2 === "string" ? content2 : "", truncated, outputTokens };
+    return { text: typeof content2 === "string" ? content2 : "", truncated, outputTokens, usage };
   }
   async chat(req) {
     const tools = req.tools?.length ? req.tools : void 0;
@@ -58641,10 +58666,11 @@ var OpenAiResponsesProvider = class {
       },
       this.http()
     );
-    reportUsage(this.onUsage, respUsage(data.usage));
+    const usage = respUsage(data.usage);
+    reportUsage(this.onUsage, usage, req.purpose);
     const text3 = typeof data.output_text === "string" && data.output_text ? data.output_text : (data.output ?? []).flatMap((o) => o.content ?? []).filter((c) => c.type === "output_text").map((c) => c.text ?? "").join("");
     const outputTokens = tokenCount(data.usage?.output_tokens);
-    return { text: text3, truncated: isTruncated(respCut(data), outputTokens, req.maxOutputTokens), outputTokens };
+    return { text: text3, truncated: isTruncated(respCut(data), outputTokens, req.maxOutputTokens), outputTokens, usage };
   }
   async chat(req) {
     const tools = req.tools?.length ? req.tools : void 0;
@@ -58715,13 +58741,14 @@ var WorkersAiProvider = class {
       withCallBudget({ ...this.transport, providerId: this.providerId }, req.budgetMs, req.maxRetries)
     );
     const u = out?.usage;
-    reportUsage(this.onUsage, u && typeof u === "object" ? openAiUsage(u.prompt_tokens, u.completion_tokens, 0) : null);
+    const usage = u && typeof u === "object" ? openAiUsage(u.prompt_tokens, u.completion_tokens, 0) : null;
+    reportUsage(this.onUsage, usage, req.purpose);
     const r = out?.response ?? out?.choices?.[0]?.message?.content;
     const outputTokens = tokenCount(u?.completion_tokens);
     const truncated = isTruncated(out?.choices?.[0]?.finish_reason === "length", outputTokens, req.maxOutputTokens);
-    if (typeof r === "string" && r) return { text: r, truncated, outputTokens };
-    if (r && typeof r === "object") return { text: JSON.stringify(r), truncated, outputTokens };
-    return { text: "", truncated, outputTokens };
+    if (typeof r === "string" && r) return { text: r, truncated, outputTokens, usage };
+    if (r && typeof r === "object") return { text: JSON.stringify(r), truncated, outputTokens, usage };
+    return { text: "", truncated, outputTokens, usage };
   }
 };
 
@@ -58762,7 +58789,7 @@ function createProvider(cfg, env = process.env, bindings = {}) {
   if (cfg.type === "none") return { provider: null };
   if (!cfg.model) return { provider: null, note: "provider.model not set" };
   const model = cfg.model;
-  const onUsage = bindings.onCall ? (usage) => bindings.onCall({ provider: priceProvider(cfg), model, usage }) : void 0;
+  const onUsage = bindings.onCall ? (usage, purpose) => bindings.onCall({ provider: priceProvider(cfg), model, usage, purpose: purpose ?? "review" }) : void 0;
   const transport = llmTransportFromConfig(cfg, env);
   if (cfg.type === "workers-ai") {
     if (!bindings.ai) return { provider: null, note: "Workers AI binding `AI` not available (Worker runtime only)" };
@@ -59563,6 +59590,7 @@ var STORY_OUTPUT_SCHEMA = object2({
 var STORY_TIMEOUT_MS = 45e3;
 async function generateStory(provider, o) {
   let timer;
+  let tokens2 = 0;
   try {
     const cap2 = Math.max(0, Math.min(24e3, o.maxDiffChars ?? 24e3));
     let diff = "";
@@ -59573,17 +59601,20 @@ ${f.patch ?? "(patch unavailable)"}
 `.slice(0, cap2 - diff.length);
     }
     const findings = o.findings.slice(0, 20).map((f) => `${f.path}:${f.line ?? "file"} review ${f.message.slice(0, 200)}`).join("\n").slice(0, 4e3);
-    const request2 = completeWithMeta(provider, {
-      system: STORY_SYSTEM_PROMPT,
-      user: `Diff:
+    const user = `Diff:
 <${DELIM}>
 ${sanitizeUntrusted(diff)}
 </${DELIM}>
 Final findings:
 <${DELIM}>
 ${sanitizeUntrusted(findings)}
-</${DELIM}>`,
+</${DELIM}>`;
+    tokens2 = estimateTokens(STORY_SYSTEM_PROMPT) + estimateTokens(user);
+    const request2 = completeWithMeta(provider, {
+      system: STORY_SYSTEM_PROMPT,
+      user,
       jsonMode: true,
+      purpose: "story",
       maxOutputTokens: 1200,
       budgetMs: STORY_TIMEOUT_MS,
       maxRetries: 0,
@@ -59592,13 +59623,15 @@ ${sanitizeUntrusted(findings)}
     const result = await Promise.race([request2, new Promise((_, reject) => {
       timer = setTimeout(() => reject(new Error("timeout")), STORY_TIMEOUT_MS);
     })]);
+    const u = result.usage;
+    tokens2 = u ? u.input + u.output + u.cacheRead + u.cacheWrite : tokens2 + estimateTokens(result.text);
     if (result.truncated) throw new Error("truncated");
     const story = validateStory(JSON.parse(result.text), o.files.map((f) => ({ path: f.path, lines: f.patch ? diffLines(f.patch) : null })));
     if (!story) throw new Error("invalid");
-    return { story };
+    return { story, tokens: tokens2 };
   } catch {
     o.log.warning("PR story unavailable; using the review without a story.");
-    return { story: null };
+    return { story: null, tokens: tokens2 };
   } finally {
     clearTimeout(timer);
   }
@@ -60011,10 +60044,11 @@ async function produceReviewResult(o) {
       notes.push(`Known false alarms in this repo: ${res.suppressed.length} finding(s) hidden, ${res.downgraded.length} listed without an inline comment (manage them in the MergeJudge panel).`);
   }
   let story = null;
+  let storyTokens = 0;
   let storyImageUrl = null;
   const storyFiles = excludeFromLlm(files, cfg.diff_exclude).kept;
   if (cfg.comment.flow_chart && provider && llm && !cached2 && !o.skipAi && storyFiles.length) {
-    ({ story } = await generateStory(provider, { files: storyFiles, findings, log }));
+    ({ story, tokens: storyTokens } = await generateStory(provider, { files: storyFiles, findings, log }));
     if (story && cfg.comment.flow_chart_style === "svg" && o.storyImage) {
       try {
         const svg = renderStorySvg(story, { animate: cfg.comment.flow_chart_animate });
@@ -60029,6 +60063,7 @@ async function produceReviewResult(o) {
     agg,
     mode: llm && provider ? provider.label : "rules-only",
     tokensEstimate: tokens2,
+    ...storyTokens ? { storyTokens } : {},
     notes,
     policyFiles: policies.used,
     fileFindings: findings.filter((f) => f.line === void 0),

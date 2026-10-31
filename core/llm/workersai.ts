@@ -35,13 +35,14 @@ export class WorkersAiProvider implements LlmProvider {
       withCallBudget({ ...this.transport, providerId: this.providerId }, req.budgetMs, req.maxRetries),
     )) as { response?: unknown; choices?: { message?: { content?: unknown }; finish_reason?: unknown }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
     const u = out?.usage;
-    reportUsage(this.onUsage, u && typeof u === "object" ? openAiUsage(u.prompt_tokens, u.completion_tokens, 0) : null);
+    const usage = u && typeof u === "object" ? openAiUsage(u.prompt_tokens, u.completion_tokens, 0) : null;
+    reportUsage(this.onUsage, usage, req.purpose);
     const r = out?.response ?? out?.choices?.[0]?.message?.content;
     // finish_reason exists only on the OpenAI-style shape; the output-token count is the fallback.
     const outputTokens = tokenCount(u?.completion_tokens);
     const truncated = isTruncated(out?.choices?.[0]?.finish_reason === "length", outputTokens, req.maxOutputTokens);
-    if (typeof r === "string" && r) return { text: r, truncated, outputTokens };
-    if (r && typeof r === "object") return { text: JSON.stringify(r), truncated, outputTokens }; // some models return parsed JSON
-    return { text: "", truncated, outputTokens };
+    if (typeof r === "string" && r) return { text: r, truncated, outputTokens, usage };
+    if (r && typeof r === "object") return { text: JSON.stringify(r), truncated, outputTokens, usage }; // some models return parsed JSON
+    return { text: "", truncated, outputTokens, usage };
   }
 }

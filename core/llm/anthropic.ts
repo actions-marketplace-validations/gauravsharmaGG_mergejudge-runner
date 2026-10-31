@@ -60,13 +60,14 @@ export class AnthropicProvider implements LlmProvider {
       },
       this.http(req.budgetMs, "maxRetries" in req && typeof req.maxRetries === "number" ? req.maxRetries : undefined),
     )) as { content?: { type: string; text?: string }[]; usage?: AnthropicUsage; stop_reason?: unknown };
-    reportUsage(this.onUsage, anthropicUsage(data.usage));
+    const usage = anthropicUsage(data.usage);
+    reportUsage(this.onUsage, usage, req.purpose);
     const text = (data.content ?? [])
       .filter((b) => b.type === "text" && typeof b.text === "string")
       .map((b) => b.text)
       .join("");
     const outputTokens = tokenCount(data.usage?.output_tokens);
-    return { text, truncated: isTruncated(data.stop_reason === "max_tokens", outputTokens, req.maxOutputTokens), outputTokens };
+    return { text, truncated: isTruncated(data.stop_reason === "max_tokens", outputTokens, req.maxOutputTokens), outputTokens, usage };
   }
   async chat(req: ChatRequest): Promise<ChatTurn> {
     const data = (await postJson(

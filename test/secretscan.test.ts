@@ -129,7 +129,7 @@ describe("applyRunnerSecretHits", () => {
     r.storyImageUrl = "https://example.com/story.svg"; r.storyStyle = "svg"; r.storyAnimate = false;
     applyRunnerSecretHits(r, new Map([["a.ts", ["test secret kind"]]]));
     expect(r.body).toContain('<img src="https://example.com/story.svg"');
-    expect(r.body).toContain("Steps: 1. Read the input; 2. Return the result");
+    expect(r.body).toContain("<details><summary>Steps as text</summary>\n\n1. Read the input\n2. Return the result\n</details>");
   });
   it("does nothing without hits, and does not double-report a file the rules already blocked", () => {
     const r = resultOf([{ path: "a.ts", status: "modified", additions: 1, deletions: 0, patch: `@@ -1 +1 @@\n+k=${REAL_AWS}` }]);

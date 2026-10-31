@@ -5,7 +5,7 @@ import type { LlmProvider } from "../core/llm/provider.js";
 import { MAX_COMMENT_CHARS, renderComment } from "../core/render.js";
 import { produceReviewResult } from "../core/review.js";
 import {
-  MAX_STORY_EDGES, MAX_STORY_STEPS, sanitizeStoryText, storyMermaid, validateStory, type StoryFile,
+  MAX_STORY_EDGES, MAX_STORY_STEPS, renderStorySection, sanitizeStoryText, storyMermaid, validateStory, type StoryFile,
 } from "../core/story.js";
 import { buildSystemPrompt, parseTriageOutput, runTriage, validateAgainstFiles } from "../core/triage.js";
 import type { PrFile } from "../core/types.js";
@@ -122,8 +122,9 @@ describe("sanitizeStoryText", () => {
     expect(sanitizeStoryText('total() returns "4"; sum({a}) skips', 60)).toBe('total() returns "4"; sum({a}) skips');
     const s = validateStory({ steps: [step("a", t, { change: "changed", before: 'list "x" (any)', after: "only [numbers]; else throw" }), step("b", `say "hi" it's`)] }, files)!;
     const md = renderComment({ agg: agg as never, mode: "m", tokensEstimate: 0, notes: [], story: s, storyStyle: "svg", storyImageUrl: "https://example.com/s.svg" });
-    expect(md).toContain("Steps: 1. Test checks \\[1, 2, NaN, Infinity, 3\\] gives 4 (list \"x\" \\(any\\) -> only \\[numbers\\]; else throw); 2. say \"hi\" it's");
-    expect(md).toContain('alt="PR story: Test checks [1, 2, NaN, Infinity, 3] gives 4. say &quot;hi&quot; it&#39;s"');
+    expect(md).toContain("1. Test checks \\[1, 2, NaN, Infinity, 3\\] gives 4 (list \"x\" \\(any\\) -> only \\[numbers\\]; else throw)\n2. say \"hi\" it's\n</details>");
+    expect(md).not.toContain("Steps:");
+    expect(md).toContain('alt="PR story: 1. Test checks [1, 2, NaN, Infinity, 3] gives 4 (list &quot;x&quot; (any) -&gt; only [numbers]; else throw). 2. say &quot;hi&quot; it&#39;s."');
     const alt = md.match(/alt="([^"]*)"/)![1]!;
     expect(alt).not.toMatch(/["<>]/);
     const m = storyMermaid(s);
@@ -190,7 +191,8 @@ describe("sticky rendering", () => {
     expect(j).toBeGreaterThan(i);
     expect(k).toBeGreaterThan(j);
     expect(md).toContain("```mermaid\nflowchart TD");
-    expect(md).toContain("Steps: 1. Parse request; 2. Validate input; 3. Reply");
+    expect(md).toContain("<details><summary>Steps as text</summary>\n\n1. Parse request\n2. Validate input\n3. Reply (old -> new)\n</details>");
+    expect(md).not.toContain("Steps:");
     expect(md).toContain("e1@{ animate: true }");
   });
   it("renders plain edges when storyAnimate is false", () => {
@@ -204,7 +206,7 @@ describe("sticky rendering", () => {
   });
   it("drops the image before the list when over the cap", () => {
     const md = open({ storyStyle: "svg", storyImageUrl: "https://example.com/" + "a".repeat(MAX_COMMENT_CHARS) });
-    expect(md).not.toContain("<img"); expect(md).toContain("Steps: 1. Parse request");
+    expect(md).not.toContain("<img"); expect(md).toContain("\n1. Parse request\n2. Validate input"); expect(md).not.toContain("Steps as text");
     expect(md).not.toContain("shortened to fit");
   });
   it("drops the chart first when over the size cap", () => {
@@ -261,13 +263,13 @@ describe("config and separate call", () => {
     expect(on[0]).toBe(off[0]);
     expect(JSON.parse(on[0]!).system).toBe(JSON.parse(off[0]!).system);
     expect(buildSystemPrompt()).not.toContain(STORY_SYSTEM_PROMPT);
-    expect(b.body).toContain("Steps: 1. Read config; 2. Apply it");
+    expect(b.body).toContain("1. Read config\n2. Apply it");
     expect(b.body).not.toContain("```mermaid");
     expect(b.lane).toBe(a.lane); expect(b.findings).toEqual(a.findings);
   });
   it("ignores review JSON story and isolates failed story calls", async () => {
     const ignored = await review("", mkProvider([], reply({ story: storyJson })));
-    expect(ignored.body).not.toContain("Steps:");
+    expect(ignored.body).not.toContain("What this PR does");
     const a = await review("", mkProvider([], reply()));
     for (const failure of ["throw", "garbage", "truncate"]) {
       const p: LlmProvider = { label: "fake", complete: async () => reply(), completeEx: async req => {
@@ -276,7 +278,10 @@ describe("config and separate call", () => {
         return { text: failure === "garbage" ? "not json" : JSON.stringify(storyJson), truncated: failure === "truncate" };
       } };
       const b = await review("comment:\n  flow_chart: true\n", p);
-      expect(b.agg).toEqual(a.agg); expect(b.findings).toEqual(a.findings); expect(b.body).toBe(a.body);
+      expect(b.agg).toEqual(a.agg); expect(b.findings).toEqual(a.findings);
+      // Only the footer differs: a failed story call still counts what was sent.
+      expect(b.body.replace(/ \(story \d+\)/, "").replace(/~\d+ tokens/, "")).toBe(a.body.replace(/~\d+ tokens/, ""));
+      expect(b.body).toMatch(/ \(story \d+\)/);
     }
   });
   it("renders hosted images or text only, and supports explicit mermaid", () => {
@@ -284,7 +289,7 @@ describe("config and separate call", () => {
     expect(image).toContain('<img src="https://example.com/story.svg" alt="PR story:');
     expect(image).toContain('width="440">');
     const plain = open({ storyStyle: "svg" });
-    expect(plain).toContain("Steps: 1."); expect(plain).not.toContain("<img"); expect(plain).not.toContain("```mermaid");
+    expect(plain).toContain("\n1. "); expect(plain).not.toContain("<img"); expect(plain).not.toContain("```mermaid");
     expect(open({ storyStyle: "svg", storyImageUrl: 'https://bad/" onerror="x' })).not.toContain("<img");
   });
 });
@@ -296,5 +301,37 @@ describe("sanitizeStoryText cap", () => {
     expect(out.length).toBeLessThanOrEqual(30);
     expect(sanitizeStoryText("short title", 30)).toBe("short title");
     expect(sanitizeStoryText("x".repeat(40), 30)).toBe("x".repeat(27) + "...");
+  });
+});
+
+describe("steps fallback text", () => {
+  const mk = (n: number, title = "Step") => validateStory({ steps: Array.from({ length: n }, (_, i) => ({ title: `${title} ${i + 1} ${"w".repeat(40)}`, change: "changed", before: 'a "b"', after: "<c>", refs: [{ path: "a.ts" }] })) }, files)!;
+  const url = "https://example.com/s.svg";
+  it("puts numbered steps in the alt text and a collapsed list under the image, no visible Steps: line", () => {
+    const lines = renderStorySection(mk(2), true, "svg", url);
+    const md = lines.join("\n");
+    expect(md).toMatch(/<img src="https:\/\/example.com\/s.svg" alt="PR story: 1\. Step 1 w+ \(a &quot;b&quot; -&gt; c\)\. 2\. Step 2/);
+    expect(md).toContain('width="440">\n\n<details><summary>Steps as text</summary>\n\n1. Step 1');
+    expect(md).toContain("\n2. Step 2");
+    expect(md).not.toContain("Steps:");
+  });
+  it("caps the alt text on a step boundary with an ellipsis and never cuts an entity", () => {
+    const alt = renderStorySection(mk(6), true, "svg", url).join("\n").match(/alt="([^"]*)"/)![1]!;
+    expect(alt.length).toBeLessThanOrEqual(400);
+    expect(alt).toMatch(/\.\.\.$/);
+    expect(alt).not.toMatch(/&[a-z#0-9]*(?!;)[^;&]*\.\.\.$/);
+    expect(alt).toMatch(/\. 3\. Step 3/);
+    for (const m of alt.matchAll(/&([^;\s]*)(;?)/g)) expect(m[2]).toBe(";");
+    // a first step longer than the cap is still cut cleanly
+    const long = validateStory({ steps: [{ title: "x".repeat(48), change: "changed", before: "q".repeat(50), after: "r".repeat(50), refs: [{ path: "a.ts" }] }, { title: "y", refs: [{ path: "a.ts" }] }] }, files)!;
+    expect(renderStorySection(long, true, "svg", url).join("\n").match(/alt="([^"]*)"/)![1]!.length).toBeLessThanOrEqual(400);
+  });
+  it("keeps the steps visible without an image, and collapsed beside a mermaid block", () => {
+    for (const lines of [renderStorySection(mk(2), true, "svg", null), renderStorySection(mk(2), true, "svg", "http://bad"), renderStorySection(mk(2), true, "svg", url, false)]) {
+      const md = lines.join("\n");
+      expect(md).toContain("\n1. Step 1"); expect(md).not.toContain("Steps as text"); expect(md).not.toContain("<img"); expect(md).not.toContain("Steps:");
+    }
+    const m = renderStorySection(mk(2), true, "mermaid", null).join("\n");
+    expect(m).toContain("```mermaid"); expect(m).toContain("<details><summary>Steps as text</summary>\n\n1. Step 1");
   });
 });

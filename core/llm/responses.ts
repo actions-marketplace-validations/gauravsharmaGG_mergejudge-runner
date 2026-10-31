@@ -52,12 +52,13 @@ export class OpenAiResponsesProvider implements LlmProvider {
       },
       this.http(),
     )) as { output_text?: string; output?: { type?: string; content?: { type?: string; text?: string }[] }[]; usage?: RespUsage } & RespStatus;
-    reportUsage(this.onUsage, respUsage(data.usage));
+    const usage = respUsage(data.usage);
+    reportUsage(this.onUsage, usage, req.purpose);
     const text = typeof data.output_text === "string" && data.output_text
       ? data.output_text
       : (data.output ?? []).flatMap((o) => o.content ?? []).filter((c) => c.type === "output_text").map((c) => c.text ?? "").join("");
     const outputTokens = tokenCount(data.usage?.output_tokens);
-    return { text, truncated: isTruncated(respCut(data), outputTokens, req.maxOutputTokens), outputTokens };
+    return { text, truncated: isTruncated(respCut(data), outputTokens, req.maxOutputTokens), outputTokens, usage };
   }
   async chat(req: ChatRequest): Promise<ChatTurn> {
     const tools = req.tools?.length ? req.tools : undefined;

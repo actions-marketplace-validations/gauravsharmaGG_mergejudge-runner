@@ -166,14 +166,43 @@ export function storyMermaid(story: Story, animate = true): string {
   return out.join("\n");
 }
 
-/** Open chart plus escaped plain-text fallback for mobile and unhosted SVGs. */
+const ALT_MAX_CHARS = 400;
+
+/** One step as plain text: title plus "(before -> after)" for a changed step. Unescaped; callers escape for their context. */
+const stepText = (s: StoryStep, esc: (t: string) => string) =>
+  `${esc(s.title)}${s.change === "changed" && s.before && s.after ? ` (${esc(s.before)} -> ${esc(s.after)})` : ""}`;
+
+/** Alt text: the numbered steps, whole steps only up to the cap (ellipsis when some are left out), escaped last so no entity is cut. */
+function storyAlt(story: Story): string {
+  const parts = story.steps.map((s, i) => `${i + 1}. ${stepText(s, (t) => t)}.`);
+  const fits = (t: string) => attr(t).length <= ALT_MAX_CHARS;
+  let out = "PR story:";
+  for (const [i, p] of parts.entries()) {
+    const next = `${out} ${p}`;
+    if (!fits(next + (i + 1 < parts.length ? "..." : ""))) {
+      if (i === 0) { // a single over-long first step: cut on a word boundary until the escaped text fits
+        let cut = Array.from(next);
+        while (cut.length && !fits(cut.join("") + "...")) cut = cut.slice(0, -8);
+        out = cut.join("").replace(/\s+\S*$/, "");
+      }
+      return attr(out + "...");
+    }
+    out = next;
+  }
+  return attr(out);
+}
+
+/** Open chart plus the steps as text: collapsed under a chart, visible when no chart is shown. Image alt text carries the steps too. */
 export function renderStorySection(story: Story, animate = true, style: "svg" | "mermaid" = "svg", imageUrl?: string | null, chart = true): string[] {
   const image = imageUrl && /^https:\/\/[^\s<>"']+$/.test(imageUrl) ? imageUrl.replace(/&/g, "&amp;") : null;
+  const mermaid = chart && style === "mermaid";
+  const img = chart && !mermaid && image;
+  const steps = story.steps.map((s, i) => `${i + 1}. ${stepText(s, mdText)}`);
   return [
     "<details open><summary>What this PR does (AI-drawn, may be incomplete)</summary>", "",
-    ...(chart && style === "mermaid" ? ["```mermaid", storyMermaid(story, animate), "```", ""] :
-      chart && image ? [`<img src="${image}" alt="PR story: ${attr(sanitizeStoryText(story.steps.map(s => s.title).join(". "), 350))}" width="440">`, ""] : []),
-    `Steps: ${story.steps.map((s, i) => `${i + 1}. ${mdText(s.title)}${s.change === "changed" && s.before && s.after ? ` (${mdText(s.before)} -> ${mdText(s.after)})` : ""}`).join("; ")}`,
+    ...(mermaid ? ["```mermaid", storyMermaid(story, animate), "```", ""] :
+      img ? [`<img src="${image}" alt="${storyAlt(story)}" width="440">`, ""] : []),
+    ...(mermaid || img ? ["<details><summary>Steps as text</summary>", "", ...steps, "</details>"] : steps),
     "", "</details>", "",
   ];
 }

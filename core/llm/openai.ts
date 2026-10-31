@@ -57,13 +57,14 @@ export class OpenAiProvider implements LlmProvider {
       },
       this.http(req.budgetMs, "maxRetries" in req && typeof req.maxRetries === "number" ? req.maxRetries : undefined),
     )) as { choices?: { message?: { content?: unknown }; finish_reason?: unknown }[]; usage?: OaUsage };
-    reportUsage(this.onUsage, oaUsage(data.usage));
+    const usage = oaUsage(data.usage);
+    reportUsage(this.onUsage, usage, req.purpose);
     const content = data.choices?.[0]?.message?.content;
     const outputTokens = tokenCount(data.usage?.completion_tokens);
     const truncated = isTruncated(data.choices?.[0]?.finish_reason === "length", outputTokens, req.maxOutputTokens);
     // A reasoning model that spends the whole limit thinking returns empty content with finish_reason "length".
     if (typeof content !== "string" && !truncated) this.empty();
-    return { text: typeof content === "string" ? content : "", truncated, outputTokens };
+    return { text: typeof content === "string" ? content : "", truncated, outputTokens, usage };
   }
   async chat(req: ChatRequest): Promise<ChatTurn> {
     const tools = req.tools?.length ? req.tools : undefined;

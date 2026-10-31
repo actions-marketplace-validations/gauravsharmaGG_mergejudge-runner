@@ -220,11 +220,11 @@ export const configSchema = z.object({
     .default({ policy: "stored" }),
   budget: z
     .object({
-      max_tokens_per_pr: z.number().int().positive().default(28000),
+      max_tokens_per_pr: z.number().int().positive().default(40000),
       /** Unset = per-model default (budget.ts: 8000 for reasoning models, else 2500). Set = used as is, clamped to the PR budget. */
       max_output_tokens: z.number().int().positive().optional(),
     })
-    .default({ max_tokens_per_pr: 28000 }),
+    .default({ max_tokens_per_pr: 40000 }),
   approval: approvalSchema,
   /**
    * Opt-in PR description check. Off by default; when on, a PR whose body does not really answer the

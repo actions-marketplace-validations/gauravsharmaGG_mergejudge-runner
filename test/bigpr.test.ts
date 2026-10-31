@@ -107,7 +107,7 @@ describe("(c) story output cap and visible failures", () => {
   });
 
   it("skips the story when the per-PR budget is used up, and says so", async () => {
-    const p = fake({ review: () => ({ text: reviewReply(["a.ts", "b.ts"]) }), story: ok, usage: () => ({ input: 27500, output: 100, cacheRead: 0, cacheWrite: 0 }) });
+    const p = fake({ review: () => ({ text: reviewReply(["a.ts", "b.ts"]) }), story: ok, usage: () => ({ input: 39500, output: 100, cacheRead: 0, cacheWrite: 0 }) });
     const r = await produceReviewResult({ ...input(f as PrFile[]), provider: p.provider });
     expect(p.calls.filter((c) => c.purpose === "story")).toHaveLength(0);
     expect(notChecked(r.body)).toContain("PR story: not drawn \\(skipped: per-PR token budget used up\\)");
@@ -232,15 +232,15 @@ describe("(f) cumulative per-PR token cap", () => {
     { path: "a.ts", status: "modified", additions: 2, deletions: 1, patch: "@@ -1,2 +1,3 @@\n a\n-b\n+c\n+d" },
     { path: "b.ts", status: "modified", additions: 1, deletions: 0, patch: "@@ -1 +1,2 @@\n a\n+x" },
   ];
-  const big = (): LlmUsage => ({ input: 26000, output: 1500, cacheRead: 0, cacheWrite: 0 });
+  const big = (): LlmUsage => ({ input: 38500, output: 1500, cacheRead: 0, cacheWrite: 0 });
 
   it("skips the retry once actual usage used up the budget, and reports it", async () => {
     const p = fake({ review: () => ({ text: "not json" }), usage: big });
     const r = await produceReviewResult({ ...input(files), provider: p.provider });
     expect(p.calls).toHaveLength(1); // no retry, no story
-    expect(notChecked(r.body)).toContain("AI retry skipped: per-PR token budget \\(28000\\) used up");
-    expect(r.usage.tokens).toBe(27500);
-    expect(r.body).toContain("~27500 tokens");
+    expect(notChecked(r.body)).toContain("AI retry skipped: per-PR token budget \\(40000\\) used up");
+    expect(r.usage.tokens).toBe(40000);
+    expect(r.body).toContain("~40000 tokens");
   });
 
   it("still retries when the budget has room, and counts both calls in the footer", async () => {
@@ -271,17 +271,17 @@ describe("(f) cumulative per-PR token cap", () => {
     const p = fake({ review: () => ({ text: reviewReply(["a.ts", "b.ts"]) }), usage: big });
     const r = await produceReviewResult({ ...input(files, noStory(cfgOf("ai:\n  mode: deep\n"))), provider: p.provider });
     expect(p.calls).toHaveLength(1);
-    expect(notChecked(r.body)).toContain("AI second pass skipped: per-PR token budget \\(28000\\) used up");
+    expect(notChecked(r.body)).toContain("AI second pass skipped: per-PR token budget \\(40000\\) used up");
   });
 
   it("perPrCap: deep tool loops use the larger of the two caps", () => {
     const cfg = cfgOf();
-    expect(perPrCap(cfg)).toBe(28000);
+    expect(perPrCap(cfg)).toBe(40000);
     expect(perPrCap(cfg, true)).toBe(60000);
   });
 });
 
-describe("big PR: reasoning model, default budget", () => {
+describe("big PR: reasoning model, 28000 budget (trims)", () => {
   it("marks truncated files, lists them and the story status, and never exceeds the cap with a skipped retry", async () => {
     const files = bigPr();
     const paths = files.map((f) => f.path);
@@ -290,9 +290,9 @@ describe("big PR: reasoning model, default budget", () => {
       story: () => ({ text: storyReply(paths) }),
       usage: () => ({ input: 23500, output: 5000, cacheRead: 0, cacheWrite: 0 }),
     });
-    const r = await produceReviewResult({ ...input(files, cfgOf("", "@cf/deepseek-ai/deepseek-v4.1-flash-1017")), provider: p.provider });
+    const r = await produceReviewResult({ ...input(files, cfgOf("budget:\n  max_tokens_per_pr: 28000\n", "@cf/deepseek-ai/deepseek-v4.1-flash-1017")), provider: p.provider });
     expect(p.calls).toHaveLength(1);
-    expect(p.calls[0]!.maxOutputTokens).toBe(resolveOutputLimit(cfgOf("", "@cf/deepseek-ai/deepseek-v4.1-flash-1017")));
+    expect(p.calls[0]!.maxOutputTokens).toBe(resolveOutputLimit(cfgOf("budget:\n  max_tokens_per_pr: 28000\n", "@cf/deepseek-ai/deepseek-v4.1-flash-1017")));
     const nc = notChecked(r.body);
     expect(nc).toContain("AI retry skipped");
     expect(nc).toContain("Diff trimmed to fit the token budget");

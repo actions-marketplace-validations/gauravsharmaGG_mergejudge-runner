@@ -138,7 +138,7 @@ export async function runDeepTriage(
   const now = opts.now ?? Date.now;
   const started = now();
   const system = buildSystemPrompt(ctx) + codeAutoPrompt(input.files, cfg) + `\n\n${deepRules(cfg, opts.tools)}`;
-  const { prompt, diffTokens } = buildUserPrompt({ ...input, context: undefined }, cfg, system);
+  const { prompt, diffTokens, trimmed } = buildUserPrompt({ ...input, context: undefined }, cfg, system);
   const messages: ChatMessage[] = [{ role: "user", content: prompt }];
   const skipped = ctx.skippedDiffFiles ?? [];
   const sysTok = estimateTokens(system);
@@ -169,7 +169,7 @@ export async function runDeepTriage(
     return t;
   };
   const result = (llm: TriageResult["llm"], error?: string): TriageResult => ({
-    llm, ...(error ? { error } : {}), retried, outputLimit: limit, ...(firstTruncated || lastTruncated ? { truncated: true } : {}),
+    llm, ...(error ? { error } : {}), retried, outputLimit: limit, ...(trimmed.length ? { trimmedFiles: trimmed } : {}), ...(firstTruncated || lastTruncated ? { truncated: true } : {}),
     tokensEstimate: used,
     breakdown: {
       ...tokenBreakdown({ systemBase: system, policyText: ctx.policyText, criteria: ctx.criteria, diffTokens, outputTokens: outTok, skipped }),
